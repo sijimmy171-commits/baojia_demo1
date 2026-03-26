@@ -274,3 +274,149 @@ button { cursor: pointer; }
 .archive-detail-header h3 { margin: 0 0 8px; font-size: 22px; }
 .archive-detail-header p { margin: 0; color: #64748b; }
 .archive-detail-body { padding: 20px 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; }
+
+.quote-sheet-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  background: #ffffff;
+}
+
+.quote-table-wrap {
+  min-height: 0;
+}
+
+.recommend-inline-bar {
+  margin: 10px 20px 0;
+  padding: 8px 12px;
+  gap: 10px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.recommend-inline-bar::-webkit-scrollbar {
+  height: 6px;
+}
+
+.recommend-inline-bar::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 999px;
+}
+
+.recommend-inline-main,
+.recommend-inline-score,
+.recommend-inline-text,
+.recommend-inline-label,
+.mini-link-button {
+  flex-shrink: 0;
+}
+
+.recommend-inline-text {
+  min-width: 0;
+}
+
+.archive-sidebar-panel-compact {
+  width: 330px;
+}
+
+.archive-sidebar-item-condensed {
+  padding: 12px 14px;
+}
+
+.archive-filter-row {
+  padding: 0;
+}
+
+.archive-summary-card-compact {
+  padding: 16px;
+}
+
+.knowledge-inline-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  height: 100%;
+}
+
+.knowledge-inline-topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.knowledge-inline-topbar h3 {
+  margin: 0 0 6px;
+  font-size: 20px;
+}
+
+.knowledge-inline-topbar p {
+  margin: 0;
+  color: #64748b;
+}
+
+.compact-two-row-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+
+.compact-section {
+  padding: 14px;
+}
+
+.compact-section h4 {
+  margin-bottom: 10px;
+}
+
+.compact-stat-grid {
+  gap: 10px;
+}
+
+.compact-stat-grid .detail-stat {
+  padding: 12px;
+}
+
+.compact-stat-grid .detail-stat strong {
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.knowledge-inline-bottom {
+  display: grid;
+  grid-template-columns: 1.1fr 0.9fr;
+  gap: 14px;
+  min-height: 0;
+}
+
+.compact-detail-table th,
+.compact-detail-table td {
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.compact-breakdown-wrap {
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+.compact-breakdown-item {
+  padding: 10px 12px;
+}
+
+.quote-total-row .quote-total-label,
+.quote-total-row .quote-total-amount {
+  background: #f8fafc;
+}
+
+@media (max-width: 1400px) {
+  .knowledge-inline-bottom {
+    grid-template-columns: 1fr;
+  }
+
+  .recommend-inline-bar {
+    flex-wrap: wrap;
+    white-space: normal;
+  }
+}

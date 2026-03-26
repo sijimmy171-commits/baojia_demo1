@@ -207,7 +207,6 @@ export default function App() {
   const [projectPageInput, setProjectPageInput] = useState('1');
   const [dimensionOverride, setDimensionOverride] = useState('');
   const [archiveQuickFilter, setArchiveQuickFilter] = useState('all');
-  const [isArchiveDetailOpen, setIsArchiveDetailOpen] = useState(false);
 
   const orderedFilteredProjects = useMemo(() => {
     const query = searchQuery.toLowerCase();
@@ -551,7 +550,7 @@ export default function App() {
                         <span className="recommend-inline-score">匹配度 {recommendedArchive.matchScore}%</span>
                         <span className="recommend-inline-text">✔ {recommendedArchive.matchHighlights?.[0]} · ✖ {recommendedArchive.matchDiffs?.[0]}</span>
                         <button className="mini-link-button" onClick={() => window.alert('Demo：已带入历史方案结构供复用参考。')}>一键复用</button>
-                        <button className="mini-link-button mini-link-button-primary" onClick={() => { setSelectedArchiveId(recommendedArchive.id); setIsArchiveDetailOpen(true); setActiveNav('knowledge'); }}>对比差异</button>
+                        <button className="mini-link-button mini-link-button-primary" onClick={() => { setSelectedArchiveId(recommendedArchive.id); setActiveNav('knowledge'); }}>对比差异</button>
                       </div>
                     )}
                     <div className="table-wrap">
@@ -582,14 +581,9 @@ export default function App() {
                         </tbody>
                         <tfoot>
                           <tr className="quote-total-row">
-                            <td colSpan={4}>
-                              <div className="quote-total-summary">
-                                <span>报价单内嵌总价</span>
-                                <strong>¥{calculateTotal().toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
-                              </div>
-                            </td>
+                            <td colSpan={4} />
                             <td className="right tinted quote-total-label">合计</td>
-                            <td className="right tinted quote-total-amount">¥{calculateTotal().toFixed(2)}</td>
+                            <td className="right tinted quote-total-amount">¥{calculateTotal().toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                             <td />
                           </tr>
                         </tfoot>
@@ -615,17 +609,17 @@ export default function App() {
       <header className="page-header page-header-knowledge">
         <div>
           <h1>知识库沉淀中心</h1>
-          <p>按参数搜索历史方案，快速筛选后从列表打开详情总结内容</p>
+          <p>按参数搜索历史方案，快速筛选后在同页查看结构化摘要</p>
         </div>
         <button className="secondary-outline-button" onClick={() => setActiveNav('assistant')}><ArrowRight size={15} />返回报价助手</button>
       </header>
       <main className="knowledge-layout archive-layout">
-        <section className="archive-sidebar-panel">
+        <section className="archive-sidebar-panel archive-sidebar-panel-compact">
           <div className="archive-sidebar-search">
             <Search size={16} />
             <input value={archiveSearch} onChange={(event) => setArchiveSearch(event.target.value)} placeholder="按产品类型、材质、防爆等级、尺寸、进出线结构搜索..." />
           </div>
-          <div className="quick-filter-row">
+          <div className="quick-filter-row archive-filter-row">
             <button className={`quick-filter ${archiveQuickFilter === 'all' ? 'quick-filter-active' : ''}`} onClick={() => setArchiveQuickFilter('all')}>全部</button>
             <button className={`quick-filter ${archiveQuickFilter === 'same-material' ? 'quick-filter-active' : ''}`} onClick={() => setArchiveQuickFilter('same-material')}>316材质</button>
             <button className={`quick-filter ${archiveQuickFilter === 'same-explosion' ? 'quick-filter-active' : ''}`} onClick={() => setArchiveQuickFilter('same-explosion')}>同防爆等级</button>
@@ -634,7 +628,7 @@ export default function App() {
           <div className="knowledge-list-meta">共 {filteredArchives.length} 条归档方案</div>
           <div className="archive-sidebar-list">
             {filteredArchives.map((item) => (
-              <button key={item.id} className={`archive-sidebar-item ${selectedArchive?.id === item.id ? 'archive-sidebar-item-active' : ''}`} onClick={() => { setSelectedArchiveId(item.id); setIsArchiveDetailOpen(true); }}>
+              <button key={item.id} className={`archive-sidebar-item archive-sidebar-item-condensed ${selectedArchive?.id === item.id ? 'archive-sidebar-item-active' : ''}`} onClick={() => setSelectedArchiveId(item.id)}>
                 <div className="archive-sidebar-top"><span>{item.client}</span><small>{item.archivedAt}</small></div>
                 <strong>{item.productType}</strong>
                 <p>{item.title}</p>
@@ -648,100 +642,92 @@ export default function App() {
         </section>
 
         <section className="archive-summary-panel">
-          <div className="archive-summary-card">
-            <h3>归档项目列表</h3>
-            <p>左侧支持持续累积的大量归档项目检索。点击任意项目后，会在右侧弹出结构化总结内容，便于历史方案对比与快速复用。</p>
-            {selectedArchive && (
-              <div className="archive-summary-preview">
-                <span>当前选中</span>
-                <strong>{selectedArchive.title}</strong>
-                <button className="primary-button" onClick={() => setIsArchiveDetailOpen(true)}>查看详细总结</button>
+          <div className="archive-summary-card archive-summary-card-compact">
+            {selectedArchive ? (
+              <div className="knowledge-inline-layout">
+                <div className="knowledge-inline-topbar">
+                  <div>
+                    <h3>{selectedArchive.title}</h3>
+                    <p>{selectedArchive.versionLabel} · {selectedArchive.quoteNumber}</p>
+                  </div>
+                  <button className="secondary-outline-button" onClick={() => setActiveNav('assistant')}>回到当前项目对比</button>
+                </div>
+
+                <div className="knowledge-inline-grid compact-two-row-grid">
+                  <div className="detail-section compact-section">
+                    <h4>1）基础信息</h4>
+                    <div className="detail-stat-grid detail-stat-grid-3 compact-stat-grid">
+                      <div className="detail-stat"><span>客户</span><strong>{selectedArchive.client}</strong></div>
+                      <div className="detail-stat"><span>时间</span><strong>{selectedArchive.archivedAt}</strong></div>
+                      <div className="detail-stat"><span>应用场景</span><strong>{selectedArchive.application || '防爆接线场景'}</strong></div>
+                    </div>
+                  </div>
+
+                  <div className="detail-section compact-section">
+                    <h4>2）关键参数</h4>
+                    <div className="detail-stat-grid detail-stat-grid-5 compact-stat-grid">
+                      <div className="detail-stat"><span>产品类型</span><strong>{selectedArchive.productType}</strong></div>
+                      <div className="detail-stat"><span>尺寸</span><strong>{selectedArchive.dimensions}</strong></div>
+                      <div className="detail-stat"><span>材质</span><strong>{selectedArchive.material}</strong></div>
+                      <div className="detail-stat"><span>防爆等级</span><strong>{selectedArchive.explosionLevel}</strong></div>
+                      <div className="detail-stat"><span>进出线结构</span><strong>{selectedArchive.wiring}</strong></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="knowledge-inline-bottom compact-two-row-grid">
+                  <div className="detail-section compact-section">
+                    <h4>3）BOM</h4>
+                    <table className="detail-table compact-detail-table">
+                      <thead>
+                        <tr>
+                          <th>物料代码</th>
+                          <th>物料名称</th>
+                          <th>规格型号</th>
+                          <th>数量</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedArchive.bomPreview?.map((item, index) => (
+                          <tr key={`${item.code}-${index}`}>
+                            <td>{item.code}</td>
+                            <td>{item.name}</td>
+                            <td>{item.model}</td>
+                            <td>{item.qty}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="detail-section compact-section">
+                    <h4>4）报价</h4>
+                    <div className="quote-breakdown-wrap compact-breakdown-wrap">
+                      <div className="quote-breakdown-total">
+                        <span>总价</span>
+                        <strong>¥{selectedArchive.total.toLocaleString()}</strong>
+                      </div>
+                      <div className="quote-breakdown-list">
+                        {selectedArchive.quoteBreakdown?.map((item) => (
+                          <div key={item.label} className="quote-breakdown-item compact-breakdown-item">
+                            <span>{item.label}</span>
+                            <strong>¥{item.amount.toLocaleString()}</strong>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
+            ) : (
+              <>
+                <h3>归档项目列表</h3>
+                <p>左侧支持持续累积的大量归档项目检索。点击任意项目后，右侧会直接展示紧凑版结构化摘要，方便历史方案对比与快速复用。</p>
+              </>
             )}
           </div>
         </section>
       </main>
-
-      {isArchiveDetailOpen && selectedArchive && (
-        <div className="archive-detail-overlay">
-          <div className="archive-detail-drawer">
-            <div className="archive-detail-header">
-              <div>
-                <h3>{selectedArchive.title}</h3>
-                <p>{selectedArchive.versionLabel} · {selectedArchive.quoteNumber}</p>
-              </div>
-              <div className="header-action-row">
-                <button className="secondary-outline-button" onClick={() => setActiveNav('assistant')}>回到当前项目对比</button>
-                <button className="icon-button subtle" onClick={() => setIsArchiveDetailOpen(false)}><X size={20} /></button>
-              </div>
-            </div>
-
-            <div className="archive-detail-body">
-              <div className="detail-section">
-                <h4>1）基础信息</h4>
-                <div className="detail-stat-grid detail-stat-grid-3">
-                  <div className="detail-stat"><span>客户</span><strong>{selectedArchive.client}</strong></div>
-                  <div className="detail-stat"><span>时间</span><strong>{selectedArchive.archivedAt}</strong></div>
-                  <div className="detail-stat"><span>应用场景</span><strong>{selectedArchive.application || '防爆接线场景'}</strong></div>
-                </div>
-              </div>
-
-              <div className="detail-section">
-                <h4>2）关键参数</h4>
-                <div className="detail-stat-grid detail-stat-grid-5">
-                  <div className="detail-stat"><span>产品类型</span><strong>{selectedArchive.productType}</strong></div>
-                  <div className="detail-stat"><span>尺寸</span><strong>{selectedArchive.dimensions}</strong></div>
-                  <div className="detail-stat"><span>材质</span><strong>{selectedArchive.material}</strong></div>
-                  <div className="detail-stat"><span>防爆等级</span><strong>{selectedArchive.explosionLevel}</strong></div>
-                  <div className="detail-stat"><span>进出线结构</span><strong>{selectedArchive.wiring}</strong></div>
-                </div>
-              </div>
-
-              <div className="detail-section">
-                <h4>3）BOM</h4>
-                <table className="detail-table">
-                  <thead>
-                    <tr>
-                      <th>物料代码</th>
-                      <th>物料名称</th>
-                      <th>规格型号</th>
-                      <th>数量</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {selectedArchive.bomPreview?.map((item, index) => (
-                      <tr key={`${item.code}-${index}`}>
-                        <td>{item.code}</td>
-                        <td>{item.name}</td>
-                        <td>{item.model}</td>
-                        <td>{item.qty}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="detail-section">
-                <h4>4）报价</h4>
-                <div className="quote-breakdown-wrap">
-                  <div className="quote-breakdown-total">
-                    <span>总价</span>
-                    <strong>¥{selectedArchive.total.toLocaleString()}</strong>
-                  </div>
-                  <div className="quote-breakdown-list">
-                    {selectedArchive.quoteBreakdown?.map((item) => (
-                      <div key={item.label} className="quote-breakdown-item">
-                        <span>{item.label}</span>
-                        <strong>¥{item.amount.toLocaleString()}</strong>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
     </>
   );
   return (
@@ -873,6 +859,8 @@ export default function App() {
     </div>
   );
 }
+
+
 
 
 
