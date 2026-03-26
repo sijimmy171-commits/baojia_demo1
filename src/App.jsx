@@ -544,27 +544,19 @@ export default function App() {
                       </div>
                     </div>
                     {recommendedArchive && (
-                      <div className="recommend-card">
-                        <div className="recommend-header">
-                          <div>
-                            <span className="recommend-eyebrow">推荐历史方案（AI匹配）</span>
-                            <h4>{recommendedArchive.client}</h4>
-                          </div>
-                          <div className="recommend-score">匹配度：{recommendedArchive.matchScore}%</div>
+                      <div className="recommend-mini-card">
+                        <div className="recommend-mini-top">
+                          <span className="recommend-eyebrow">推荐历史方案（AI匹配）</span>
+                          <span className="recommend-score">{recommendedArchive.matchScore}%</span>
                         </div>
-                        <div className="recommend-grid">
-                          <div>
-                            <div className="recommend-block-title">关键一致：</div>
-                            {recommendedArchive.matchHighlights?.map((item) => <div key={item} className="recommend-ok">✔ {item}</div>)}
-                          </div>
-                          <div>
-                            <div className="recommend-block-title">差异：</div>
-                            {recommendedArchive.matchDiffs?.map((item) => <div key={item} className="recommend-diff">✖ {item}</div>)}
-                          </div>
+                        <div className="recommend-mini-title">最优匹配：{recommendedArchive.client}</div>
+                        <div className="recommend-mini-lines">
+                          {recommendedArchive.matchHighlights?.slice(0, 2).map((item) => <div key={item} className="recommend-ok">✔ {item}</div>)}
+                          {recommendedArchive.matchDiffs?.slice(0, 1).map((item) => <div key={item} className="recommend-diff">✖ {item}</div>)}
                         </div>
-                        <div className="recommend-actions">
-                          <button className="secondary-outline-button" onClick={() => window.alert('Demo：已带入历史方案结构供复用参考。')}>一键复用</button>
-                          <button className="primary-button" onClick={() => setActiveNav('knowledge')}>对比差异</button>
+                        <div className="recommend-mini-actions">
+                          <button className="mini-link-button" onClick={() => window.alert('Demo：已带入历史方案结构供复用参考。')}>一键复用</button>
+                          <button className="mini-link-button mini-link-button-primary" onClick={() => setActiveNav('knowledge')}>对比差异</button>
                         </div>
                       </div>
                     )}
@@ -872,6 +864,7 @@ export default function App() {
     </div>
   );
 }
+
 
 
 

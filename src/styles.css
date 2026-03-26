@@ -203,17 +203,17 @@ button { cursor: pointer; }
   body { min-width: 1160px; }
   .dimension-grid, .knowledge-detail-grid, .knowledge-compare-row { grid-template-columns: 1fr; }
 }
-.recommend-card { margin: 20px 20px 0; padding: 18px; border: 1px solid #dbeafe; border-radius: 16px; background: linear-gradient(135deg, #eff6ff 0%, #ffffff 100%); }
-.recommend-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 12px; }
+.recommend-mini-card { margin: 16px 20px 0; padding: 14px 16px; border: 1px solid #dbeafe; border-radius: 14px; background: #f8fbff; max-width: 420px; }
+.recommend-mini-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; }
 .recommend-eyebrow { display: inline-block; font-size: 12px; color: #2563eb; margin-bottom: 6px; }
-.recommend-header h4 { margin: 0; font-size: 20px; color: #0f172a; }
-.recommend-score { padding: 6px 10px; border-radius: 999px; background: #dbeafe; color: #1d4ed8; font-weight: 700; }
-.recommend-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
-.recommend-block-title { font-size: 12px; color: #64748b; margin-bottom: 8px; }
+.recommend-mini-title { font-size: 14px; font-weight: 700; color: #0f172a; margin-bottom: 10px; }
+.recommend-score { padding: 4px 10px; border-radius: 999px; background: #dbeafe; color: #1d4ed8; font-weight: 700; font-size: 12px; }
+.recommend-mini-lines { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+
 .recommend-ok, .recommend-diff { line-height: 1.9; font-size: 14px; }
 .recommend-ok { color: #059669; }
 .recommend-diff { color: #dc2626; }
-.recommend-actions { display: flex; gap: 12px; flex-wrap: wrap; }
+.recommend-mini-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .upgraded-knowledge-layout { align-items: stretch; }
 .upgraded-knowledge-panel { width: 380px; }
 .quick-filter-row { display: flex; gap: 8px; flex-wrap: wrap; padding: 0 16px; }
@@ -241,3 +241,6 @@ button { cursor: pointer; }
 @media (max-width: 1400px) {
   .recommend-grid, .case-card-grid, .detail-stat-grid-3, .detail-stat-grid-5, .quote-breakdown-wrap { grid-template-columns: 1fr; }
 }
+
+.mini-link-button { border: 1px solid #cbd5e1; background: #fff; color: #475569; border-radius: 999px; padding: 6px 12px; font-size: 12px; }
+.mini-link-button-primary { background: #eff6ff; color: #2563eb; border-color: #bfdbfe; }
