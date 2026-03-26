@@ -207,6 +207,7 @@ export default function App() {
   const [projectPageInput, setProjectPageInput] = useState('1');
   const [dimensionOverride, setDimensionOverride] = useState('');
   const [archiveQuickFilter, setArchiveQuickFilter] = useState('all');
+  const [isArchiveDetailOpen, setIsArchiveDetailOpen] = useState(false);
 
   const orderedFilteredProjects = useMemo(() => {
     const query = searchQuery.toLowerCase();
@@ -544,20 +545,13 @@ export default function App() {
                       </div>
                     </div>
                     {recommendedArchive && (
-                      <div className="recommend-mini-card">
-                        <div className="recommend-mini-top">
-                          <span className="recommend-eyebrow">推荐历史方案（AI匹配）</span>
-                          <span className="recommend-score">{recommendedArchive.matchScore}%</span>
-                        </div>
-                        <div className="recommend-mini-title">最优匹配：{recommendedArchive.client}</div>
-                        <div className="recommend-mini-lines">
-                          {recommendedArchive.matchHighlights?.slice(0, 2).map((item) => <div key={item} className="recommend-ok">✔ {item}</div>)}
-                          {recommendedArchive.matchDiffs?.slice(0, 1).map((item) => <div key={item} className="recommend-diff">✖ {item}</div>)}
-                        </div>
-                        <div className="recommend-mini-actions">
-                          <button className="mini-link-button" onClick={() => window.alert('Demo：已带入历史方案结构供复用参考。')}>一键复用</button>
-                          <button className="mini-link-button mini-link-button-primary" onClick={() => setActiveNav('knowledge')}>对比差异</button>
-                        </div>
+                      <div className="recommend-inline-bar">
+                        <span className="recommend-inline-label">推荐历史方案（AI匹配）</span>
+                        <span className="recommend-inline-main">最优匹配：{recommendedArchive.client}</span>
+                        <span className="recommend-inline-score">匹配度 {recommendedArchive.matchScore}%</span>
+                        <span className="recommend-inline-text">✔ {recommendedArchive.matchHighlights?.[0]} · ✖ {recommendedArchive.matchDiffs?.[0]}</span>
+                        <button className="mini-link-button" onClick={() => window.alert('Demo：已带入历史方案结构供复用参考。')}>一键复用</button>
+                        <button className="mini-link-button mini-link-button-primary" onClick={() => { setSelectedArchiveId(recommendedArchive.id); setIsArchiveDetailOpen(true); setActiveNav('knowledge'); }}>对比差异</button>
                       </div>
                     )}
                     <div className="table-wrap">
@@ -621,13 +615,13 @@ export default function App() {
       <header className="page-header page-header-knowledge">
         <div>
           <h1>知识库沉淀中心</h1>
-          <p>按参数搜索历史方案，快速筛选并查看结构化案例详情</p>
+          <p>按参数搜索历史方案，快速筛选后从列表打开详情总结内容</p>
         </div>
         <button className="secondary-outline-button" onClick={() => setActiveNav('assistant')}><ArrowRight size={15} />返回报价助手</button>
       </header>
-      <main className="knowledge-layout upgraded-knowledge-layout">
-        <section className="knowledge-list-panel upgraded-knowledge-panel">
-          <div className="knowledge-search-box">
+      <main className="knowledge-layout archive-layout">
+        <section className="archive-sidebar-panel">
+          <div className="archive-sidebar-search">
             <Search size={16} />
             <input value={archiveSearch} onChange={(event) => setArchiveSearch(event.target.value)} placeholder="按产品类型、材质、防爆等级、尺寸、进出线结构搜索..." />
           </div>
@@ -638,34 +632,51 @@ export default function App() {
             <button className={`quick-filter ${archiveQuickFilter === 'same-structure' ? 'quick-filter-active' : ''}`} onClick={() => setArchiveQuickFilter('same-structure')}>同进出线结构</button>
           </div>
           <div className="knowledge-list-meta">共 {filteredArchives.length} 条归档方案</div>
-          <div className="knowledge-list">
+          <div className="archive-sidebar-list">
             {filteredArchives.map((item) => (
-              <button key={item.id} className={`knowledge-card case-card ${selectedArchive?.id === item.id ? 'knowledge-card-active' : ''}`} onClick={() => setSelectedArchiveId(item.id)}>
-                <div className="knowledge-card-top"><span>{item.client}</span><small>{item.archivedAt}</small></div>
+              <button key={item.id} className={`archive-sidebar-item ${selectedArchive?.id === item.id ? 'archive-sidebar-item-active' : ''}`} onClick={() => { setSelectedArchiveId(item.id); setIsArchiveDetailOpen(true); }}>
+                <div className="archive-sidebar-top"><span>{item.client}</span><small>{item.archivedAt}</small></div>
                 <strong>{item.productType}</strong>
                 <p>{item.title}</p>
-                <div className="case-card-grid">
-                  <span>材质：{item.material}</span>
-                  <span>尺寸：{item.dimensions}</span>
-                  <span>防爆：{item.explosionLevel}</span>
-                  <span>总价：¥{item.total.toLocaleString()}</span>
+                <div className="archive-sidebar-meta">
+                  <span>{item.material}</span>
+                  <span>{item.dimensions}</span>
                 </div>
               </button>
             ))}
           </div>
         </section>
 
-        <section className="knowledge-detail-panel">
-          {selectedArchive ? (
-            <div className="knowledge-detail-card structured-detail-card">
-              <div className="knowledge-detail-header">
-                <div>
-                  <h3>{selectedArchive.title}</h3>
-                  <p>{selectedArchive.versionLabel} · {selectedArchive.quoteNumber}</p>
-                </div>
-                <button className="primary-button" onClick={() => setActiveNav('assistant')}>回到当前项目对比</button>
+        <section className="archive-summary-panel">
+          <div className="archive-summary-card">
+            <h3>归档项目列表</h3>
+            <p>左侧支持持续累积的大量归档项目检索。点击任意项目后，会在右侧弹出结构化总结内容，便于历史方案对比与快速复用。</p>
+            {selectedArchive && (
+              <div className="archive-summary-preview">
+                <span>当前选中</span>
+                <strong>{selectedArchive.title}</strong>
+                <button className="primary-button" onClick={() => setIsArchiveDetailOpen(true)}>查看详细总结</button>
               </div>
+            )}
+          </div>
+        </section>
+      </main>
 
+      {isArchiveDetailOpen && selectedArchive && (
+        <div className="archive-detail-overlay">
+          <div className="archive-detail-drawer">
+            <div className="archive-detail-header">
+              <div>
+                <h3>{selectedArchive.title}</h3>
+                <p>{selectedArchive.versionLabel} · {selectedArchive.quoteNumber}</p>
+              </div>
+              <div className="header-action-row">
+                <button className="secondary-outline-button" onClick={() => setActiveNav('assistant')}>回到当前项目对比</button>
+                <button className="icon-button subtle" onClick={() => setIsArchiveDetailOpen(false)}><X size={20} /></button>
+              </div>
+            </div>
+
+            <div className="archive-detail-body">
               <div className="detail-section">
                 <h4>1）基础信息</h4>
                 <div className="detail-stat-grid detail-stat-grid-3">
@@ -728,11 +739,9 @@ export default function App() {
                 </div>
               </div>
             </div>
-          ) : (
-            <div className="empty-state"><AlertCircle size={48} /><p className="empty-copy"><span>暂无命中的归档记录。</span><br />可以先在正式报价单页点击“归档到知识库”。</p></div>
-          )}
-        </section>
-      </main>
+          </div>
+        </div>
+      )}
     </>
   );
   return (
@@ -864,6 +873,8 @@ export default function App() {
     </div>
   );
 }
+
+
 
 
 
