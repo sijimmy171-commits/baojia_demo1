@@ -135,10 +135,6 @@ const INITIAL_ARCHIVES = [
     quoteNumber: '202603180023-A008-V03',
     total: 4288.5,
     dimensions: '350×260×180',
-    summary: '已归档一份历史接线箱方案，可用于快速对比型号和报价结构。',
-    chatCount: 6,
-    bomCount: 9,
-    tags: ['接线箱', '316', 'IP66'],
     application: '石化设备防爆接线箱',
     productType: '防爆接线箱',
     material: '不锈钢 316',
@@ -181,10 +177,6 @@ function createArchiveRecord(project, version, data, total, quoteNumber) {
     quoteNumber,
     total,
     dimensions: data?.dimensions?.suggested || '-',
-    summary: data?.chat?.[data.chat.length - 1]?.text || '已归档该项目的报价单与聊天记录。',
-    chatCount: data?.chat?.length || 0,
-    bomCount: data?.quotation?.items?.length || 0,
-    tags: [project.info.name, data?.dimensions?.suggested || '未推算'],
   };
 }
 
@@ -859,6 +851,9 @@ export default function App() {
     </div>
   );
 }
+
+
+
 
 
 
