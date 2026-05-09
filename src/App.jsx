@@ -203,6 +203,26 @@ const SCENE_TYPE_BY_PRODUCT = {
 
 const EXCEL_REQUIRED_HEADERS = ['序号', '产品类别'];
 
+const HISTORICAL_PARAM_FIELDS = [
+  ['productType', '产品类别'],
+  ['shellMaterial', '箱体材质'],
+  ['explosionMark', '防爆标志'],
+  ['terminalBrand', '端子品牌'],
+  ['terminalCurrent', '端子电流/客户导线平方'],
+  ['terminalQty', '端子数量'],
+  ['wireDirection', '进出线方向'],
+  ['inGlandType', '进线格兰类型'],
+  ['inGlandSpec', '进线格兰数量及规格'],
+  ['outGlandType', '出线格兰类型'],
+  ['outGlandSpec', '出线格兰数量及规格'],
+  ['plugSpec', '堵头数量及规格'],
+  ['plugHole', '堵头是否开孔'],
+  ['breatherMaterial', '呼吸阀材质'],
+  ['installMode', '安装方式'],
+  ['rainCover', '是否需要防雨罩'],
+  ['shellColor', '箱体颜色'],
+];
+
 function cloneDeep(value) {
   return JSON.parse(JSON.stringify(value));
 }
@@ -506,6 +526,66 @@ function makeImportedProjectFromRow(importRow, index) {
   };
 }
 
+function makeOfflineQuoteProject(importRow, task, index) {
+  const project = makeImportedProjectFromRow(importRow, index);
+  return {
+    ...project,
+    id: `offline-${task.id}-${index}-${importRow.seq}`,
+    source: 'batch_import',
+    dateGroup: '批量导入',
+    info: {
+      ...project.info,
+      client: task.fileName.replace(/\.(xls|xlsx)$/i, ''),
+      name: `${importRow.projectCode}-${importRow.productType || getScene(importRow.sceneType).label}-报价${index}`,
+    },
+    chat: [
+      { id: Date.now() + index * 10 + 1, sender: 'ai', text: `离线任务 ${task.id} 已读取 Excel 第 ${importRow.rowNumber} 行。`, time: task.createdTime },
+      { id: Date.now() + index * 10 + 2, sender: 'ai', text: `项目代码：${importRow.projectCode}；识别场景：${importRow.sceneLabel}；参数摘要：${importRow.summary || '待补充'}`, time: task.createdTime },
+      { id: Date.now() + index * 10 + 3, sender: 'ai', text: '已生成需求参数、BOM 物料清单和正式报价单草稿，当前状态为待审核。', time: task.createdTime },
+    ],
+    importMeta: {
+      taskId: task.id,
+      fileName: task.fileName,
+      sheetName: task.sheetName,
+      projectCode: importRow.projectCode,
+      rowNumber: importRow.rowNumber,
+      seq: importRow.seq,
+      summary: importRow.summary,
+    },
+  };
+}
+
+function makeHistoricalParsedRecord(importRow, task, index) {
+  const raw = importRow.raw || {};
+  return {
+    id: `parsed-${task.id}-${index}-${importRow.seq}`,
+    taskId: task.id,
+    fileName: task.fileName,
+    sheetName: task.sheetName,
+    projectCode: importRow.projectCode,
+    rowNumber: importRow.rowNumber,
+    sceneLabel: importRow.sceneLabel,
+    createdAt: task.createdAt,
+    productType: findExcelValue(raw, '产品类别'),
+    shellMaterial: findExcelValue(raw, '箱体材质'),
+    explosionMark: findExcelValue(raw, '防爆标志'),
+    terminalBrand: findExcelValue(raw, '端子品牌'),
+    terminalCurrent: findExcelValue(raw, '端子电流/客户导线平方'),
+    terminalQty: findExcelValue(raw, '端子数量'),
+    wireDirection: findExcelValue(raw, '进出线方向'),
+    inGlandType: findExcelValue(raw, '进线格兰类型'),
+    inGlandSpec: findExcelValue(raw, '进线格兰数量及规格'),
+    outGlandType: findExcelValue(raw, '出线格兰类型'),
+    outGlandSpec: findExcelValue(raw, '出线格兰数量及规格'),
+    plugSpec: findExcelValue(raw, '堵头数量及规格'),
+    plugHole: findExcelValue(raw, '堵头是否开孔'),
+    breatherMaterial: findExcelValue(raw, '呼吸阀材质'),
+    installMode: findExcelValue(raw, '安装方式'),
+    rainCover: findExcelValue(raw, '是否需要防雨罩'),
+    shellColor: findExcelValue(raw, '箱体颜色'),
+  };
+}
+
 function parseImportWorksheet(workbook, fileName) {
   const sheetName = workbook.SheetNames[0];
   const sheet = workbook.Sheets[sheetName];
@@ -520,6 +600,7 @@ function parseImportWorksheet(workbook, fileName) {
   const importRows = rows.map((raw, index) => {
     const seq = findExcelValue(raw, '序号');
     const productType = findExcelValue(raw, '产品类别');
+    const projectCodeFromFile = findExcelValue(raw, '项目代码');
     const hasBusinessValue = Object.entries(raw).some(([key, value]) => normalizeExcelText(key) !== '序号' && normalizeExcelText(value));
     if (!seq || !hasBusinessValue) return null;
     const sceneType = SCENE_TYPE_BY_PRODUCT[productType];
@@ -527,7 +608,9 @@ function parseImportWorksheet(workbook, fileName) {
     if (!productType) status.push({ type: 'error', message: '缺少产品类别' });
     if (productType && !sceneType) status.push({ type: 'error', message: `未知产品类别：${productType}` });
     if (seenSeq.has(seq)) status.push({ type: 'warning', message: `序号 ${seq} 重复` });
+    if (!projectCodeFromFile) status.push({ type: 'warning', message: '缺少项目代码，已用序号生成临时代码' });
     seenSeq.add(seq);
+    const projectCode = projectCodeFromFile || `PROJECT-${seq}`;
     const summary = [
       findExcelValue(raw, '箱体材质'),
       findExcelValue(raw, '防爆标志'),
@@ -538,6 +621,7 @@ function parseImportWorksheet(workbook, fileName) {
     return {
       id: `${seq}-${index + 2}`,
       seq,
+      projectCode,
       rowNumber: index + 2,
       productType,
       sceneType: sceneType || 'unknown',
@@ -721,9 +805,43 @@ const INITIAL_ARCHIVES = [
   createArchiveRecord(INITIAL_PROJECTS[8], INITIAL_PROJECTS[8].versions[0], INITIAL_PROJECTS[8].data['v1.0'], 2124, '202604110088-O001-V10'),
 ];
 
+const INITIAL_IMPORT_TASKS = [];
+
+const INITIAL_HISTORICAL_PARSED_RECORDS = [
+  {
+    id: 'parsed-demo-1',
+    taskId: 'DEMO-20260506-001',
+    fileName: 'AI询价方案提报表(1)(2).xls',
+    sheetName: 'Sheet1',
+    projectCode: 'PROJECT-1',
+    rowNumber: 2,
+    sceneLabel: '接线箱',
+    createdAt: '2026-05-06 15:30:00',
+    productType: '接线箱',
+    shellMaterial: '不锈钢304',
+    explosionMark: '全隔爆 db IIC',
+    terminalBrand: '菲尼克斯',
+    terminalCurrent: '≤20A 或 0.5～1.5mm²',
+    terminalQty: '40',
+    wireDirection: '下进下出',
+    inGlandType: '非铠装，可接管，单密封 BDM-BN',
+    inGlandSpec: '2-M32×1.5',
+    outGlandType: '非铠装，可接管，单密封 BDM-BN',
+    outGlandSpec: '8-M25×1.5+4-M20×1.5',
+    plugSpec: '1-M25×1.5+1-M20×1.5',
+    plugHole: '不开孔',
+    breatherMaterial: '304',
+    installMode: '挂式',
+    rainCover: '不配防雨罩',
+    shellColor: '不锈钢本色',
+  },
+];
+
 export default function App() {
   const [projects, setProjects] = useState(INITIAL_PROJECTS);
   const [archives, setArchives] = useState(INITIAL_ARCHIVES);
+  const [importTasks, setImportTasks] = useState(INITIAL_IMPORT_TASKS);
+  const [historicalParsedRecords, setHistoricalParsedRecords] = useState(INITIAL_HISTORICAL_PARSED_RECORDS);
   const [debugTables, setDebugTables] = useState(() => cloneDeep(DEBUG_TABLES));
   const [archivedProjectIds, setArchivedProjectIds] = useState([]);
   const [activeNav, setActiveNav] = useState('assistant');
@@ -734,6 +852,11 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [archiveSearch, setArchiveSearch] = useState('');
   const [archiveQuickFilter, setArchiveQuickFilter] = useState('all');
+  const [historyTab, setHistoryTab] = useState('quotes');
+  const [materialSearch, setMaterialSearch] = useState('');
+  const [materialQuickFilter, setMaterialQuickFilter] = useState('all');
+  const [selectedImportTaskId, setSelectedImportTaskId] = useState('');
+  const [batchAuditProjectId, setBatchAuditProjectId] = useState('');
   const [inputText, setInputText] = useState('');
   const [projectPage, setProjectPage] = useState(1);
   const [projectPageInput, setProjectPageInput] = useState('1');
@@ -826,6 +949,31 @@ export default function App() {
     return { total: rows.length, valid: valid.length, warnings, errors };
   }, [importPreview]);
 
+  const selectedImportTask = importTasks.find((task) => task.id === selectedImportTaskId) || importTasks[0] || null;
+
+  const filteredHistoricalParsedRecords = useMemo(() => {
+    const query = materialSearch.trim().toLowerCase();
+    return historicalParsedRecords.filter((item) => {
+      const queryText = [
+        item.projectCode,
+        item.productType,
+        item.sceneLabel,
+        item.shellMaterial,
+        item.explosionMark,
+        item.terminalQty,
+        item.inGlandSpec,
+        item.outGlandSpec,
+      ].join(' ').toLowerCase();
+      const matchesQuery = !query || queryText.includes(query);
+      const matchesFilter =
+        materialQuickFilter === 'all' ||
+        (materialQuickFilter === 'junction_box' && item.productType?.includes('接线箱')) ||
+        (materialQuickFilter === 'material' && item.shellMaterial?.includes('不锈钢')) ||
+        (materialQuickFilter === 'gland' && [item.inGlandSpec, item.outGlandSpec].join(' ').trim());
+      return matchesQuery && matchesFilter;
+    });
+  }, [historicalParsedRecords, materialQuickFilter, materialSearch]);
+
   useEffect(() => {
     if (currentProject && !currentProject.versions.some((version) => version.id === activeVersionId)) {
       setActiveVersionId(currentProject.versions[currentProject.versions.length - 1].id);
@@ -854,6 +1002,12 @@ export default function App() {
       setSelectedArchiveId(filteredArchives[0].id);
     }
   }, [filteredArchives, selectedArchiveId]);
+
+  useEffect(() => {
+    if (importTasks.length && !importTasks.some((task) => task.id === selectedImportTaskId)) {
+      setSelectedImportTaskId(importTasks[0].id);
+    }
+  }, [importTasks, selectedImportTaskId]);
 
   useEffect(() => {
     const tables = debugTables[debugMode] || [];
@@ -1075,6 +1229,8 @@ export default function App() {
       const workbook = XLSX.read(buffer, { type: 'array' });
       const preview = parseImportWorksheet(workbook, file.name);
       setImportPreview(preview);
+      setBatchAuditProjectId('');
+      setActiveNav('batch');
     } catch (error) {
       console.error(error);
       setImportError('Excel 解析失败，请确认文件为 .xls 或 .xlsx 格式。');
@@ -1090,18 +1246,51 @@ export default function App() {
       window.alert('当前没有可生成的有效项目，请先检查导入预览。');
       return;
     }
-    const newProjects = validRows.map((row, index) => makeImportedProjectFromRow(row, index + 1));
+    const now = new Date();
+    const task = {
+      id: `IMPORT-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(Date.now()).slice(-4)}`,
+      fileName: importPreview.fileName,
+      sheetName: importPreview.sheetName,
+      createdAt: now.toLocaleString('zh-CN', { hour12: false }).replace(/\//g, '-'),
+      createdTime: now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }),
+      status: '等待处理',
+      progress: 8,
+      totalRows: importPreview.rows.length,
+      quoteCount: validRows.length,
+      successCount: validRows.length,
+      failedCount: importPreview.rows.length - validRows.length,
+      records: [],
+    };
+    const newProjects = validRows.map((row, index) => makeOfflineQuoteProject(row, task, index + 1));
+    const records = validRows.map((row, index) => ({
+      id: `record-${task.id}-${index + 1}`,
+      taskId: task.id,
+      projectId: newProjects[index].id,
+      projectCode: row.projectCode,
+      seq: row.seq,
+      rowNumber: row.rowNumber,
+      productType: row.productType,
+      sceneLabel: row.sceneLabel,
+      summary: row.summary,
+      raw: row.raw,
+      aiStatus: '待审核',
+      reviewStatus: '未审核',
+      status: row.status,
+    }));
+    const nextTask = { ...task, records };
+    const parsedRecords = validRows.map((row, index) => makeHistoricalParsedRecord(row, task, index + 1));
     setProjects((prev) => [...newProjects, ...prev]);
     setArchivedProjectIds((prev) => prev.filter((id) => !newProjects.some((project) => project.id === id)));
-    setActiveProjectId(newProjects[0].id);
-    setActiveVersionId('v1.0');
-    setActiveMainTab('requirements');
-    setActiveSubCategory(SCENE_PARAM_CATEGORIES[newProjects[0].sceneType][0]);
-    setProjectPage(1);
-    setProjectPageInput('1');
-    setActiveNav('assistant');
+    setImportTasks((prev) => [nextTask, ...prev]);
+    setHistoricalParsedRecords((prev) => [...parsedRecords, ...prev]);
+    setSelectedImportTaskId(task.id);
+    setBatchAuditProjectId('');
+    setActiveNav('batch');
     setImportPreview(null);
-    window.alert(`已从 Excel 生成 ${newProjects.length} 个报价项目。`);
+    window.setTimeout(() => setImportTasks((prev) => prev.map((item) => (item.id === task.id ? { ...item, status: 'AI解析中', progress: 36, records: item.records.map((record) => ({ ...record, aiStatus: 'AI解析中' })) } : item))), 600);
+    window.setTimeout(() => setImportTasks((prev) => prev.map((item) => (item.id === task.id ? { ...item, status: '生成报价草稿', progress: 72, records: item.records.map((record) => ({ ...record, aiStatus: '生成报价草稿' })) } : item))), 1400);
+    window.setTimeout(() => setImportTasks((prev) => prev.map((item) => (item.id === task.id ? { ...item, status: '待审核', progress: 100, records: item.records.map((record) => ({ ...record, aiStatus: '待审核' })) } : item))), 2200);
+    window.alert(`已创建离线导入任务 ${task.id}，共生成 ${newProjects.length} 条报价单草稿。`);
   };
 
   const openProject = (project) => {
@@ -1110,7 +1299,39 @@ export default function App() {
     setActiveVersionId(latest.id);
     setActiveMainTab('requirements');
     setActiveSubCategory((SCENE_PARAM_CATEGORIES[project.sceneType] || SCENE_PARAM_CATEGORIES.junction_box)[0]);
+    setBatchAuditProjectId('');
     setActiveNav('assistant');
+  };
+
+  const openProjectForBatchAudit = (project) => {
+    setActiveProjectId(project.id);
+    const latest = project.versions.find((version) => version.isLatest) || project.versions[project.versions.length - 1];
+    setActiveVersionId(latest.id);
+    setActiveMainTab('requirements');
+    setActiveSubCategory((SCENE_PARAM_CATEGORIES[project.sceneType] || SCENE_PARAM_CATEGORIES.junction_box)[0]);
+    setBatchAuditProjectId(project.id);
+    setActiveNav('batch');
+  };
+
+  const returnToBatchTask = () => {
+    setBatchAuditProjectId('');
+    setActiveNav('batch');
+  };
+
+  const openImportQuoteRecord = (record) => {
+    const project = projects.find((item) => item.id === record.projectId);
+    if (!project) {
+      window.alert('未找到该报价草稿，请重新导入文件。');
+      return;
+    }
+    setImportTasks((prev) =>
+      prev.map((task) =>
+        task.id === record.taskId
+          ? { ...task, records: task.records.map((item) => (item.id === record.id ? { ...item, reviewStatus: '审核中' } : item)) }
+          : task,
+      ),
+    );
+    openProjectForBatchAudit(project);
   };
 
   const categoryHasMissing = (category) => {
@@ -1146,7 +1367,7 @@ export default function App() {
   const renderDefaultParamsTable = (params) => (
     <div className="requirements-inner">
       <table className="params-table">
-        <thead><tr><th>参数</th><th>依赖</th><th>当前值</th><th>说明</th></tr></thead>
+        <thead><tr><th>参数</th><th>依赖</th><th>当前值</th></tr></thead>
         <tbody>
           {params.length ? params.map((param) => {
             const isMissing = param.dependency === 'strong' && !String(param.value ?? '').trim();
@@ -1155,10 +1376,9 @@ export default function App() {
                 <td className="param-field">{param.field}</td>
                 <td><span className={`tag ${param.dependency === 'strong' ? 'tag-strong' : 'tag-weak'}`}>{param.dependency === 'strong' ? '强依赖' : '弱依赖'}</span></td>
                 <td>{renderManualOrSelect(param.category, param.field, param.value, (value) => updateParamValue(param.id, value), param.note || '请选择或输入', `param-select ${isMissing ? 'param-missing' : ''}`)}</td>
-                <td>{param.note || '支持手动维护，后续可接规则引擎。'}</td>
               </tr>
             );
-          }) : <tr><td colSpan={4} className="params-empty">当前场景暂无该类参数</td></tr>}
+          }) : <tr><td colSpan={3} className="params-empty">暂无参数</td></tr>}
         </tbody>
       </table>
     </div>
@@ -1190,26 +1410,26 @@ export default function App() {
               </div>
             ))}
           </div>
-          {!(currentData?.glandRows || []).length && <div className="config-empty-line">暂无格兰，点击"新增一行"添加</div>}
+          {!(currentData?.glandRows || []).length && <div className="config-empty-line">暂无格兰</div>}
           <div className="config-footer-row"><button className="secondary-outline-button" onClick={addGlandRow}><PlusCircle size={15} />新增一行</button><span>数量、型号、方向、外螺纹为必填参数；支持不同型号设置不同数量</span></div>
         </div>
       </div>
       <div className="config-card-shell">
         <div className="config-card-header"><h4>堵头配置（BDT）</h4><button className="secondary-outline-button" onClick={() => window.alert('静态演示：已执行堵头物料匹配测试。')}>匹配物料测试</button></div>
-        <div className="table-wrap compact-config-table"><table className="quote-table"><thead><tr>{['状态', '型号', '螺纹规格', '材质', '是否开孔', '安装方向', '数量', '操作'].map((item) => <th key={item}>{item}</th>)}</tr></thead><tbody>{renderSmallEmptyRow(8, '暂无堵头，点击"新增一行"添加')}</tbody></table></div>
+        <div className="table-wrap compact-config-table"><table className="quote-table"><thead><tr>{['状态', '型号', '螺纹规格', '材质', '是否开孔', '安装方向', '数量', '操作'].map((item) => <th key={item}>{item}</th>)}</tr></thead><tbody>{renderSmallEmptyRow(8, '暂无堵头')}</tbody></table></div>
         <div className="config-footer-row"><button className="secondary-outline-button"><PlusCircle size={15} />新增一行</button><span>型号、螺纹规格、是否开孔、数量为必填参数；开孔时增安型配锁母，防爆型配凸台</span></div>
       </div>
       <div className="config-card-shell">
         <div className="config-card-header"><h4>呼吸阀配置（BHX系列）</h4><button className="secondary-outline-button" onClick={() => window.alert('静态演示：已执行呼吸阀匹配测试。')}>匹配物料测试</button></div>
-        <div className="table-wrap compact-config-table"><table className="quote-table"><thead><tr>{['状态', '型号', '螺纹规格', '材质', '开孔', '方向', '数量', '操作'].map((item) => <th key={item}>{item}</th>)}</tr></thead><tbody>{renderSmallEmptyRow(8, '暂无呼吸阀，点击"新增一行"添加')}</tbody></table></div>
+        <div className="table-wrap compact-config-table"><table className="quote-table"><thead><tr>{['状态', '型号', '螺纹规格', '材质', '开孔', '方向', '数量', '操作'].map((item) => <th key={item}>{item}</th>)}</tr></thead><tbody>{renderSmallEmptyRow(8, '暂无呼吸阀')}</tbody></table></div>
         <div className="config-footer-row"><button className="secondary-outline-button"><PlusCircle size={15} />新增一行</button><span>型号、数量为必填参数</span></div>
       </div>
       <div className="config-card-shell">
         <div className="config-card-header"><h4>关联物料配件</h4><button className="secondary-outline-button" onClick={() => window.alert('静态演示：已根据格兰行匹配锁母/凸台配件。')}>配件匹配测试</button></div>
         <div className="accessory-block-title">系统匹配（仅可删除）</div>
-        <div className="table-wrap compact-config-table"><table className="quote-table"><thead><tr>{['来源', '配件类别', '物料编码', '物料名称', '数量', '操作'].map((item) => <th key={item}>{item}</th>)}</tr></thead><tbody>{(currentData?.glandRows || []).length ? (currentData.glandRows || []).map((row, index) => <tr key={`acc-${row.id}`}><td>格兰第{index + 1}行</td><td>凸台</td><td className="mono">03.08.01.600209</td><td><span className="strong">通头焊接凸台_{row.threadSpec || 'M32×1.5'}_3mm_{row.material || '304'}</span></td><td>{row.quantity || 1}</td><td><button className="icon-button danger"><Trash2 size={16} /></button></td></tr>) : renderSmallEmptyRow(6, '暂无系统匹配写入的配件；执行「智能物料匹配」或下方「配件匹配测试」后可在此查看与删除。')}</tbody></table></div>
+        <div className="table-wrap compact-config-table"><table className="quote-table"><thead><tr>{['来源', '配件类别', '物料编码', '物料名称', '数量', '操作'].map((item) => <th key={item}>{item}</th>)}</tr></thead><tbody>{(currentData?.glandRows || []).length ? (currentData.glandRows || []).map((row, index) => <tr key={`acc-${row.id}`}><td>格兰第{index + 1}行</td><td>凸台</td><td className="mono">03.08.01.600209</td><td><span className="strong">通头焊接凸台_{row.threadSpec || 'M32×1.5'}_3mm_{row.material || '304'}</span></td><td>{row.quantity || 1}</td><td><button className="icon-button danger"><Trash2 size={16} /></button></td></tr>) : renderSmallEmptyRow(6, '暂无系统匹配配件')}</tbody></table></div>
         <div className="accessory-block-title">用户自选配件（锁母 / 凸台）</div>
-        <div className="table-wrap compact-config-table"><table className="quote-table"><thead><tr>{['数量', '配件类别', '螺纹规格', '材质', '厚度', '操作'].map((item) => <th key={item}>{item}</th>)}</tr></thead><tbody>{renderSmallEmptyRow(6, '暂无；点击下方新增按钮添加')}</tbody></table></div>
+        <div className="table-wrap compact-config-table"><table className="quote-table"><thead><tr>{['数量', '配件类别', '螺纹规格', '材质', '厚度', '操作'].map((item) => <th key={item}>{item}</th>)}</tr></thead><tbody>{renderSmallEmptyRow(6, '暂无自选配件')}</tbody></table></div>
         <div className="config-footer-row"><button className="secondary-outline-button"><PlusCircle size={15} />新增锁母</button><button className="secondary-outline-button"><PlusCircle size={15} />新增凸台</button></div>
       </div>
     </div>
@@ -1239,16 +1459,15 @@ export default function App() {
               </div>
             ))}
           </div>
-          {!(currentData?.terminalRows || []).length && <div className="config-empty-line">暂无端子，点击"新增一行"添加</div>}
+          {!(currentData?.terminalRows || []).length && <div className="config-empty-line">暂无端子</div>}
           <div className="config-footer-row"><button className="secondary-outline-button" onClick={addTerminalRow}><PlusCircle size={15} />新增一行</button></div>
         </div>
       </div>
       <div className="config-card-shell">
         <div className="config-card-header"><h4>端子关联配件（挡板 / 尾顶）</h4><button className="secondary-outline-button" onClick={() => window.alert('静态演示：已执行端子配件匹配测试。')}>匹配物料测试</button></div>
         <div className="accessory-block-title">系统匹配（仅可删除）</div>
-        <div className="config-empty-line">暂无系统匹配写入的端子配件；执行「智能物料匹配」或下方「匹配物料测试」后可在此查看与删除。</div>
-        {['用户自选 — 挡板', '用户自选 — 尾顶'].map((title) => <div key={title} className="terminal-accessory-section"><div className="accessory-block-title">{title}</div><div className="table-wrap compact-config-table"><table className="quote-table"><thead><tr>{['来源端子', '规格说明', '数量', '匹配依据', '已解析物料', '解析', '操作'].map((item) => <th key={item}>{item}</th>)}</tr></thead><tbody>{renderSmallEmptyRow(7, `暂无${title.includes('挡板') ? '挡板' : '尾顶'}自选行；可点击下方按钮新增`)}</tbody></table></div><div className="config-footer-row"><button className="secondary-outline-button"><PlusCircle size={15} />新增一行</button></div></div>)}
-        <p className="sheet-help accessory-help">用户自选区通过来源端子与预制校验接口定位物料，编码写入会话但不展示；报价与 BOM 仍使用解析后的物料编码。</p>
+        <div className="config-empty-line">暂无系统匹配端子配件</div>
+        {['用户自选 — 挡板', '用户自选 — 尾顶'].map((title) => <div key={title} className="terminal-accessory-section"><div className="accessory-block-title">{title}</div><div className="table-wrap compact-config-table"><table className="quote-table"><thead><tr>{['来源端子', '规格说明', '数量', '匹配依据', '已解析物料', '解析', '操作'].map((item) => <th key={item}>{item}</th>)}</tr></thead><tbody>{renderSmallEmptyRow(7, `暂无${title.includes('挡板') ? '挡板' : '尾顶'}自选行`)}</tbody></table></div><div className="config-footer-row"><button className="secondary-outline-button"><PlusCircle size={15} />新增一行</button></div></div>)}
       </div>
     </div>
   );
@@ -1300,7 +1519,6 @@ export default function App() {
             return <label key={field} className="online-field"><span>{field === '包装方式' ? '包装类型' : field}</span>{param ? renderManualOrSelect('包装', param.field, param.value, (value) => updateParamValue(param.id, value), `选择${field}`, 'config-input') : <input className="config-input" placeholder="智能推荐后填入" />}</label>;
           })}
         </div>
-        <p className="sheet-help inline-help">智能物料匹配会在最后一步自动执行「智能推荐包装」并写入推荐结果（如命中）。</p>
       </div>
     </div>
   );
@@ -1309,7 +1527,7 @@ export default function App() {
     <div className="requirements-inner">
       <div className="config-card-shell">
         <div className="config-card-header"><h4>其他物料</h4></div>
-        <div className="table-wrap compact-config-table"><table className="quote-table"><thead><tr>{['字段名称', '字段值', '数量', '操作'].map((item) => <th key={item}>{item}</th>)}</tr></thead><tbody>{renderSmallEmptyRow(4, '暂无其他物料，点击"新增一行"添加')}</tbody></table></div>
+        <div className="table-wrap compact-config-table"><table className="quote-table"><thead><tr>{['字段名称', '字段值', '数量', '操作'].map((item) => <th key={item}>{item}</th>)}</tr></thead><tbody>{renderSmallEmptyRow(4, '暂无其他物料')}</tbody></table></div>
         <div className="config-footer-row"><button className="secondary-outline-button"><PlusCircle size={15} />新增一行</button><span>用于记录其他需要报价的物料信息</span></div>
       </div>
     </div>
@@ -1343,13 +1561,13 @@ export default function App() {
       <div className="full-height">
         <div className="sheet-card">
           <div className="sheet-header compact-header">
-            <div><h3 className="sheet-heading"><Box size={16} className="sheet-heading-icon" />BOM物料清单</h3><p className="sheet-help">{currentScene.label}当前报价版本对应的可编辑 BOM，支持人工补料、删料和调整数量。</p></div>
+            <div><h3 className="sheet-heading"><Box size={16} className="sheet-heading-icon" />BOM物料清单</h3></div>
             <div className="header-action-row"><button className="secondary-outline-button" onClick={addBomItem}><PlusCircle size={15} />新增物料</button><button className="secondary-outline-button" onClick={() => window.alert('静态演示：BOM 已按当前参数刷新。')}>更新BOM</button><button className="secondary-outline-button" onClick={() => window.alert('静态演示：这里会导出 BOM Excel。')}><Download size={15} />导出 Excel</button><button className="secondary-outline-button" onClick={() => window.alert('静态演示：这里会打开图纸预览。')}>预览图纸</button><button className="bom-jump-button" onClick={() => setActiveMainTab('quotation_sheet')}>去正式报价单<ArrowRight size={14} /></button></div>
           </div>
           <div className="table-wrap">
             <table className="quote-table bom-table">
               <thead><tr><th>物料编码</th><th>物料名称</th><th>规格型号</th><th>品牌</th><th className="center">数量</th><th className="center">操作</th></tr></thead>
-              <tbody>{items.length ? items.map((item) => <tr key={item.id}><td><input value={item.code} onChange={(event) => updateBomItem(item.id, 'code', event.target.value)} className="bom-input mono-input" /></td><td><input value={item.name} onChange={(event) => updateBomItem(item.id, 'name', event.target.value)} className="bom-input strong-input" /></td><td><input value={item.model} onChange={(event) => updateBomItem(item.id, 'model', event.target.value)} className="bom-input" /></td><td><input value={item.brand} onChange={(event) => updateBomItem(item.id, 'brand', event.target.value)} className="bom-input" /></td><td className="center"><input type="number" value={item.quantity} onChange={(event) => updateBomItem(item.id, 'quantity', event.target.value)} className="bom-input center-input" /></td><td className="center"><button className="icon-button danger" onClick={() => deleteBomItem(item.id)}><Trash2 size={16} /></button></td></tr>) : renderSmallEmptyRow(6, '暂无物料，点击"新增物料"添加')}</tbody>
+              <tbody>{items.length ? items.map((item) => <tr key={item.id}><td><input value={item.code} onChange={(event) => updateBomItem(item.id, 'code', event.target.value)} className="bom-input mono-input" /></td><td><input value={item.name} onChange={(event) => updateBomItem(item.id, 'name', event.target.value)} className="bom-input strong-input" /></td><td><input value={item.model} onChange={(event) => updateBomItem(item.id, 'model', event.target.value)} className="bom-input" /></td><td><input value={item.brand} onChange={(event) => updateBomItem(item.id, 'brand', event.target.value)} className="bom-input" /></td><td className="center"><input type="number" value={item.quantity} onChange={(event) => updateBomItem(item.id, 'quantity', event.target.value)} className="bom-input center-input" /></td><td className="center"><button className="icon-button danger" onClick={() => deleteBomItem(item.id)}><Trash2 size={16} /></button></td></tr>) : renderSmallEmptyRow(6, '暂无物料')}</tbody>
             </table>
           </div>
         </div>
@@ -1364,12 +1582,12 @@ export default function App() {
         <div className="full-height">
           <div className="sheet-card">
             <div className="sheet-header compact-header">
-              <div><h3>正式报价单</h3><p className="sheet-help">报价单根据 BOM 物料清单生成，可保存版本或导出 Excel。</p></div>
+              <div><h3>正式报价单</h3></div>
               <div className="header-action-row"><button className="secondary-outline-button" onClick={() => window.alert('静态演示：当前报价版本已保存。')}>保存版本</button><button className="primary-button" onClick={() => setIsExportPreviewOpen(true)}><Download size={15} />导出 Excel</button></div>
             </div>
             <div className="empty-state embedded-empty">
               <AlertCircle size={48} />
-              <p className="empty-copy"><span>暂无报价数据，请先在BOM页面添加物料</span></p>
+              <p className="empty-copy"><span>暂无报价数据</span></p>
               <button className="secondary-outline-button" onClick={() => setActiveMainTab('bom')}><ArrowLeft size={15} />返回 BOM</button>
             </div>
           </div>
@@ -1396,30 +1614,146 @@ export default function App() {
     );
   };
 
-  const renderAssistantView = () => (
-    <>
+  const renderBatchImportView = () => {
+    const getRecordKeyFacts = (record) => {
+      const raw = record.raw || {};
+      const parts = (record.summary || '').split('/').map((item) => item.trim()).filter(Boolean);
+      const pick = (...headers) => headers.map((header) => findExcelValue(raw, header)).find(Boolean) || '';
+      return [
+        ['产品类别', record.productType || pick('产品类别') || '-'],
+        ['材质', parts[0] || '-'],
+        ['防爆', parts[1] || '-'],
+        ['端子品牌', pick('端子品牌') || '-'],
+        ['端子', parts[2] || '-'],
+        ['进出线方向', pick('进出线方向') || '-'],
+        ['进线格兰', pick('进线格兰数量及规格', '进线格兰数量及规格型号', '进线格兰规格') || parts[3] || '-'],
+        ['出线格兰', pick('出线格兰数量及规格', '出线格兰数量及规格型号', '出线格兰规格') || parts[4] || '-'],
+        ['堵头', pick('堵头数量及规格') || '-'],
+        ['防雨罩', pick('是否需要防雨罩') || '-'],
+        ['颜色', pick('箱体颜色') || '-'],
+      ];
+    };
+    const getRecordSummaryLine = (record) => {
+      const facts = getRecordKeyFacts(record);
+      const selected = ['材质', '防爆', '端子', '进出线方向', '进线格兰', '出线格兰']
+        .map((label) => facts.find(([key]) => key === label))
+        .filter((item) => item && item[1] && item[1] !== '-')
+        .map(([label, value]) => `${label}：${value}`);
+      return selected.join(' / ') || record.summary || '-';
+    };
+    return (
+      <>
+        <header className="page-header page-header-knowledge">
+          <div>
+            <h1>批量导入</h1>
+          </div>
+          <button className="primary-button" onClick={() => excelInputRef.current?.click()}><FileSpreadsheet size={16} />上传 Excel 创建任务</button>
+        </header>
+        <main className="batch-layout">
+          <section className="batch-task-panel">
+            <div className="batch-panel-head"><strong>离线任务列表</strong><span>{importTasks.length} 个任务</span></div>
+            <div className="batch-task-list">
+              {importTasks.length ? importTasks.map((task) => (
+                <button key={task.id} className={`batch-task-card ${selectedImportTask?.id === task.id ? 'batch-task-card-active' : ''}`} onClick={() => setSelectedImportTaskId(task.id)}>
+                  <div className="batch-task-top"><strong>{task.id}</strong><span className="tag tag-ai">{task.status}</span></div>
+                  <p>{task.fileName}</p>
+                  <div className="batch-progress"><i style={{ width: `${task.progress}%` }} /></div>
+                  <div className="batch-task-meta"><span>报价单 {task.quoteCount}</span><span>成功 {task.successCount}</span><span>失败 {task.failedCount}</span></div>
+                </button>
+              )) : <div className="batch-empty"><FileSpreadsheet size={42} /><p>暂无导入任务</p><button className="secondary-outline-button" onClick={() => excelInputRef.current?.click()}>上传 Excel</button></div>}
+            </div>
+          </section>
+          <section className="batch-detail-panel">
+            {selectedImportTask ? (
+              <div className="sheet-card">
+                <div className="sheet-header compact-header">
+                  <div>
+                    <h3>{selectedImportTask.fileName}</h3>
+                    <div className="sheet-meta"><span>{selectedImportTask.sheetName}</span><span>{selectedImportTask.createdAt}</span></div>
+                  </div>
+                  <div className="status-chip-row">
+                    <div className="status-chip"><span>总行数</span><strong>{selectedImportTask.totalRows}</strong></div>
+                    <div className="status-chip status-chip-accent"><span>报价草稿</span><strong>{selectedImportTask.quoteCount}</strong></div>
+                    <div className="status-chip"><span>任务状态</span><strong>{selectedImportTask.status}</strong></div>
+                  </div>
+                </div>
+                <div className="batch-record-table-wrap">
+                  <table className="quote-table batch-record-table">
+                    <thead>
+                      <tr>
+                        <th>项目代码</th>
+                        <th>序号</th>
+                        <th>产品类别</th>
+                        <th>报价草稿</th>
+                        <th>场景</th>
+                        <th>关键参数摘要</th>
+                        <th>状态</th>
+                        <th className="center">操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(selectedImportTask.records || []).map((record) => {
+                        const project = projects.find((item) => item.id === record.projectId);
+                        const warnings = (record.status || []).filter((item) => item.type === 'warning');
+                        return (
+                          <tr key={record.id} className="batch-record-row" onClick={() => openImportQuoteRecord(record)}>
+                            <td className="mono">{record.projectCode}</td>
+                            <td className="mono">{record.seq}</td>
+                            <td>{record.productType || '-'}</td>
+                            <td><span className="strong">{project?.info.client || 'Excel批量导入客户'}</span><br /><span className="muted-small">{project?.info.name || `Excel导入-序号${record.seq}-${record.productType || ''}`}</span></td>
+                            <td><span className="tag tag-ai">{record.sceneLabel}</span></td>
+                            <td className="batch-summary-cell">{getRecordSummaryLine(record)}</td>
+                            <td>
+                              <div className="batch-status-stack">
+                                <span className={record.reviewStatus === '审核中' ? 'tag tag-warning' : 'tag tag-strong'}>{record.reviewStatus}</span>
+                                {warnings.map((item) => <span key={item.message} className="tag tag-warning">{item.message}</span>)}
+                              </div>
+                            </td>
+                            <td className="center"><button className="mini-link-button mini-link-button-primary" onClick={(event) => { event.stopPropagation(); openImportQuoteRecord(record); }}>进入审核</button></td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : (
+              <div className="empty-state"><FileSpreadsheet size={48} /><button className="primary-button" onClick={() => excelInputRef.current?.click()}>上传 Excel 创建任务</button></div>
+            )}
+          </section>
+        </main>
+      </>
+    );
+  };
+
+  const renderAssistantView = () => {
+    const isBatchAudit = activeNav === 'batch' && batchAuditProjectId && currentProject?.id === batchAuditProjectId && currentProject?.source === 'batch_import';
+    return (
+      <>
       <header className="page-header">
         <div className="page-header-block">
           <div className="eyebrow-row"><span className="eyebrow-chip">{currentScene.label}</span><span className="eyebrow-muted">{currentProject?.info.client}</span></div>
-          <h1>{currentScene.quoteTitle}</h1>
-          <p>{currentScene.description} 左侧保留整个项目对话，右侧按报价版本维护需求参数、BOM 和正式报价单。</p>
+          <h1>{isBatchAudit ? currentProject?.info.name : currentScene.quoteTitle}</h1>
         </div>
         <div className="status-chip-row">
+          {isBatchAudit && <div className="status-chip"><span>项目代码</span><strong>{currentProject?.importMeta?.projectCode}</strong></div>}
           <div className="status-chip status-chip-accent"><span>当前场景</span><strong>{currentScene.application}</strong></div>
           <div className="status-chip"><span>报价版本</span><strong>{currentVersion?.label}</strong></div>
           <div className="status-chip"><span>报价金额</span><strong>¥{currentQuoteTotal.toLocaleString()}</strong></div>
+          {isBatchAudit && <button className="secondary-outline-button header-return-button" onClick={returnToBatchTask}><ArrowLeft size={15} />返回批量任务</button>}
         </div>
       </header>
-      <main className="assistant-layout">
-        <section className="chat-panel">
-          <div className="chat-panel-head">
-            <div className="chat-project-meta"><strong>{currentProject?.info.engineer}</strong><span>{currentProject?.info.client}</span></div>
-            <div className="assistant-mini-strip"><span className="assistant-mini-pill">{currentScene.label}</span><span className="assistant-mini-pill">{currentProject?.info.name}</span></div>
-            <div className="chat-project-note">项目对话持续保留，不随报价版本切换覆盖；场景决定右侧参数和 BOM 模板。</div>
-          </div>
-          <div className="chat-scroll" ref={chatScrollRef}>{(currentChat || []).map((item) => <div key={item.id} className={`chat-row ${item.sender === 'user' ? 'chat-row-user' : 'chat-row-ai'}`}>{item.sender === 'ai' && <div className="chat-avatar">AI</div>}<div className={`chat-bubble ${item.sender === 'user' ? 'chat-bubble-user' : 'chat-bubble-ai'}`}>{renderRichMessage(item.text, item.sender === 'ai')}</div></div>)}</div>
-          <div className="chat-input-bar"><button className="icon-button subtle"><Mic size={16} /></button><button className="icon-button subtle"><Paperclip size={16} /></button><input value={inputText} onChange={(event) => setInputText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') handleSendMessage(); }} placeholder={`补充${currentScene.label}参数或记录客户反馈...`} /><button className="send-button" onClick={handleSendMessage}><Send size={18} /></button></div>
-        </section>
+      <main className={`assistant-layout ${isBatchAudit ? 'assistant-layout-audit' : ''}`}>
+        {!isBatchAudit && (
+          <section className="chat-panel">
+            <div className="chat-panel-head">
+              <div className="chat-project-meta"><strong>{currentProject?.info.engineer}</strong><span>{currentProject?.info.client}</span></div>
+              <div className="assistant-mini-strip"><span className="assistant-mini-pill">{currentScene.label}</span><span className="assistant-mini-pill">{currentProject?.info.name}</span></div>
+            </div>
+            <div className="chat-scroll" ref={chatScrollRef}>{(currentChat || []).map((item) => <div key={item.id} className={`chat-row ${item.sender === 'user' ? 'chat-row-user' : 'chat-row-ai'}`}>{item.sender === 'ai' && <div className="chat-avatar">AI</div>}<div className={`chat-bubble ${item.sender === 'user' ? 'chat-bubble-user' : 'chat-bubble-ai'}`}>{renderRichMessage(item.text, item.sender === 'ai')}</div></div>)}</div>
+            <div className="chat-input-bar"><button className="icon-button subtle"><Mic size={16} /></button><button className="icon-button subtle"><Paperclip size={16} /></button><input value={inputText} onChange={(event) => setInputText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') handleSendMessage(); }} placeholder={`补充${currentScene.label}参数或记录客户反馈...`} /><button className="send-button" onClick={handleSendMessage}><Send size={18} /></button></div>
+          </section>
+        )}
         <section className="quotation-panel">
           <div className="quote-version-bar"><span className="quote-version-label">当前报价版本</span><div className="quote-version-actions"><select value={currentVersion?.id} onChange={(event) => handleVersionChange(event.target.value)} className="quote-version-select">{currentProject?.versions.map((version) => <option key={version.id} value={version.id}>{version.label} - {version.timestamp.split(' ')[1]}</option>)}</select><button className="secondary-outline-button" onClick={handleCreateQuoteVersion}><PlusCircle size={15} />新增报价版本</button></div></div>
           <div className="tabs"><button className={`tab ${activeMainTab === 'requirements' ? 'tab-active' : ''}`} onClick={() => setActiveMainTab('requirements')}><FileText size={16} />1. 需求参数测算</button><button className={`tab ${activeMainTab === 'bom' ? 'tab-active' : ''}`} onClick={handleOpenBomTab}><ListTodo size={16} />2. BOM物料清单</button><button className={`tab ${activeMainTab === 'quotation_sheet' ? 'tab-active' : ''}`} onClick={() => setActiveMainTab('quotation_sheet')}><Coins size={16} />3. 正式报价单</button></div>
@@ -1427,7 +1761,8 @@ export default function App() {
         </section>
       </main>
     </>
-  );
+    );
+  };
 
   const renderKnowledgeView = () => (
     <>
@@ -1444,9 +1779,53 @@ export default function App() {
     </>
   );
 
+  const renderHistoryProjectView = () => (
+    <>
+      <header className="page-header page-header-knowledge">
+        <div>
+          <h1>{historyTab === 'quotes' ? '历史项目 / 历史报价单' : '历史项目 / 历史资料库'}</h1>
+        </div>
+        <button className="secondary-outline-button" onClick={() => setActiveNav('assistant')}><ArrowRight size={15} />返回报价助手</button>
+      </header>
+      {historyTab === 'quotes' ? (
+        <main className="knowledge-layout archive-layout">
+          <section className="archive-sidebar-panel archive-sidebar-panel-compact">
+            <div className="archive-sidebar-search"><Search size={16} /><input value={archiveSearch} onChange={(event) => setArchiveSearch(event.target.value)} placeholder="搜索客户、场景、型号、报价编号..." /></div>
+            <div className="quick-filter-row archive-filter-row"><button className={`quick-filter ${archiveQuickFilter === 'all' ? 'quick-filter-active' : ''}`} onClick={() => setArchiveQuickFilter('all')}>全部</button><button className={`quick-filter ${archiveQuickFilter === 'same-material' ? 'quick-filter-active' : ''}`} onClick={() => setArchiveQuickFilter('same-material')}>316材质</button><button className={`quick-filter ${archiveQuickFilter === 'same-explosion' ? 'quick-filter-active' : ''}`} onClick={() => setArchiveQuickFilter('same-explosion')}>同防爆等级</button><button className={`quick-filter ${archiveQuickFilter === 'same-structure' ? 'quick-filter-active' : ''}`} onClick={() => setArchiveQuickFilter('same-structure')}>同结构</button></div>
+            <div className="knowledge-list-meta">共 {filteredArchives.length} 份历史报价单</div>
+            <div className="archive-sidebar-list">{filteredArchives.map((item) => <button key={item.id} className={`archive-sidebar-item archive-sidebar-item-condensed ${selectedArchive?.id === item.id ? 'archive-sidebar-item-active' : ''}`} onClick={() => setSelectedArchiveId(item.id)}><div className="archive-sidebar-top"><span>{item.client}</span><small>{item.archivedAt}</small></div><strong>{item.application}</strong><p>{item.title}</p><div className="archive-sidebar-meta"><span>{item.material}</span><span>{item.dimensions}</span></div></button>)}</div>
+          </section>
+          <section className="archive-summary-panel">
+            <div className="archive-summary-card archive-summary-card-compact">
+              {selectedArchive ? <div className="knowledge-inline-layout"><div className="knowledge-inline-topbar"><div><h3>{selectedArchive.title}</h3><p>{selectedArchive.versionLabel} - {selectedArchive.quoteNumber}</p></div><div className="header-action-row"><button className="secondary-outline-button" onClick={handleResumeArchivedProject}><PlusCircle size={15} />继续报价</button></div></div><div className="knowledge-inline-grid compact-two-row-grid"><div className="detail-section compact-section"><h4>1. 基本信息</h4><div className="detail-stat-grid detail-stat-grid-3 compact-stat-grid"><div className="detail-stat"><span>客户</span><strong>{selectedArchive.client}</strong></div><div className="detail-stat"><span>归档时间</span><strong>{selectedArchive.archivedAt}</strong></div><div className="detail-stat"><span>应用场景</span><strong>{selectedArchive.application}</strong></div></div></div><div className="detail-section compact-section"><h4>2. 产品结构</h4><div className="detail-stat-grid detail-stat-grid-5 compact-stat-grid"><div className="detail-stat"><span>产品类型</span><strong>{selectedArchive.productType}</strong></div><div className="detail-stat"><span>箱体尺寸</span><strong>{selectedArchive.dimensions}</strong></div><div className="detail-stat"><span>材质</span><strong>{selectedArchive.material}</strong></div><div className="detail-stat"><span>防爆等级</span><strong>{selectedArchive.explosionLevel}</strong></div><div className="detail-stat"><span>结构摘要</span><strong>{selectedArchive.wiring}</strong></div></div></div></div><div className="knowledge-inline-bottom compact-two-row-grid"><div className="detail-section compact-section"><h4>3. BOM 预览</h4><table className="detail-table compact-detail-table"><thead><tr><th>物料编码</th><th>物料名称</th><th>规格型号</th><th>数量</th></tr></thead><tbody>{selectedArchive.bomPreview?.map((item, index) => <tr key={`${item.code}-${index}`}><td>{item.code}</td><td>{item.name}</td><td>{item.model}</td><td>{item.qty}</td></tr>)}</tbody></table></div><div className="detail-section compact-section"><h4>4. 报价拆分</h4><div className="quote-breakdown-wrap compact-breakdown-wrap"><div className="quote-breakdown-total"><span>总价</span><strong>¥{selectedArchive.total.toLocaleString()}</strong></div><div className="quote-breakdown-list">{selectedArchive.quoteBreakdown?.map((item) => <div key={item.label} className="quote-breakdown-item compact-breakdown-item"><span>{item.label}</span><strong>¥{item.amount.toLocaleString()}</strong></div>)}</div></div></div></div></div> : <><h3>暂无历史报价单</h3><p>项目归档后会自动进入这里。</p></>}
+            </div>
+          </section>
+        </main>
+      ) : (
+        <main className="history-material-layout">
+          <section className="sheet-card">
+            <div className="sheet-header compact-header">
+              <div><h3>历史资料库</h3></div>
+              <div className="archive-sidebar-search material-search"><Search size={16} /><input value={materialSearch} onChange={(event) => setMaterialSearch(event.target.value)} placeholder="搜索项目代码、材质、防爆、格兰、端子数量..." /></div>
+            </div>
+            <div className="quick-filter-row material-filter-row"><button className={`quick-filter ${materialQuickFilter === 'all' ? 'quick-filter-active' : ''}`} onClick={() => setMaterialQuickFilter('all')}>全部</button><button className={`quick-filter ${materialQuickFilter === 'junction_box' ? 'quick-filter-active' : ''}`} onClick={() => setMaterialQuickFilter('junction_box')}>接线箱</button><button className={`quick-filter ${materialQuickFilter === 'material' ? 'quick-filter-active' : ''}`} onClick={() => setMaterialQuickFilter('material')}>不锈钢材质</button><button className={`quick-filter ${materialQuickFilter === 'gland' ? 'quick-filter-active' : ''}`} onClick={() => setMaterialQuickFilter('gland')}>含格兰规格</button></div>
+            <div className="table-wrap">
+              <table className="quote-table historical-material-table">
+                <thead><tr><th>项目代码</th><th>行号</th>{HISTORICAL_PARAM_FIELDS.map(([, label]) => <th key={label}>{label}</th>)}</tr></thead>
+                <tbody>
+                  {filteredHistoricalParsedRecords.length ? filteredHistoricalParsedRecords.map((item) => <tr key={item.id}><td className="mono">{item.projectCode}</td><td>{item.rowNumber}</td>{HISTORICAL_PARAM_FIELDS.map(([key]) => <td key={key}>{item[key] || '-'}</td>)}</tr>) : <tr><td colSpan={HISTORICAL_PARAM_FIELDS.length + 2} className="params-empty">暂无历史资料库记录</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </main>
+      )}
+    </>
+  );
+
   const renderRulesView = () => (
     <>
-      <header className="page-header page-header-knowledge"><div><h1>规则引擎</h1><p>静态演示规则页：展示提示词模板、字段映射、强依赖校验和 BOM 匹配策略。</p></div><button className="secondary-outline-button" onClick={() => setActiveNav('assistant')}><ArrowRight size={15} />返回报价助手</button></header>
+      <header className="page-header page-header-knowledge"><div><h1>规则引擎</h1></div><button className="secondary-outline-button" onClick={() => setActiveNav('assistant')}><ArrowRight size={15} />返回报价助手</button></header>
       <main className="rules-layout">
         <section className="rules-card rules-card-wide"><div className="rules-card-head"><Cpu size={18} /><h3>提示词模板</h3></div><p>主对话会按当前项目场景注入不同的字段 schema：接线箱关注格兰和端子，配电箱关注回路与电气件，操作柱关注按钮、灯、急停和立柱。</p><div className="prompt-preview">系统角色：你是防爆产品报价助手。请先识别场景，再输出缺失强依赖项、默认弱依赖项、推荐 BOM 和报价风险提示。</div></section>
         <section className="rules-card"><div className="rules-card-head"><Tag size={18} /><h3>字段映射</h3></div><table className="detail-table"><tbody><tr><td>shell_material</td><td>壳体材质</td></tr><tr><td>gland_specs</td><td>格兰规格</td></tr><tr><td>distribution_loop_count</td><td>配电箱回路数</td></tr><tr><td>operation_button_count</td><td>操作柱按钮数量</td></tr></tbody></table></section>
@@ -1476,7 +1855,7 @@ export default function App() {
 
   const renderDebugView = () => (
     <>
-      <header className="page-header page-header-knowledge"><div><h1>数据调试</h1><p>本地静态数据调试页，可演示物料库、逻辑规则、搜索、编辑、删除和导出入口。</p></div><div className="header-action-row"><button className="secondary-outline-button" onClick={() => setDebugTables(cloneDeep(DEBUG_TABLES))}><RotateCcw size={15} />恢复 mock 数据</button><button className="secondary-outline-button" onClick={() => setActiveNav('assistant')}><ArrowRight size={15} />返回报价助手</button></div></header>
+      <header className="page-header page-header-knowledge"><div><h1>数据调试</h1></div><div className="header-action-row"><button className="secondary-outline-button" onClick={() => setDebugTables(cloneDeep(DEBUG_TABLES))}><RotateCcw size={15} />恢复 mock 数据</button><button className="secondary-outline-button" onClick={() => setActiveNav('assistant')}><ArrowRight size={15} />返回报价助手</button></div></header>
       <main className="debug-layout">
         <section className="debug-panel">
           <div className="debug-tabs"><button className={`quick-filter ${debugMode === 'material' ? 'quick-filter-active' : ''}`} onClick={() => { setDebugMode('material'); setDebugTableKey(debugTables.material[0].key); }}>物料库</button><button className={`quick-filter ${debugMode === 'config' ? 'quick-filter-active' : ''}`} onClick={() => { setDebugMode('config'); setDebugTableKey(debugTables.config[0].key); }}>逻辑规则</button></div>
@@ -1484,14 +1863,15 @@ export default function App() {
         </section>
         <section className="debug-content">
           <div className="debug-toolbar"><div className="archive-sidebar-search"><Search size={16} /><input value={debugSearch} onChange={(event) => setDebugSearch(event.target.value)} placeholder="搜索编码、名称、规格、场景..." /></div><button className="secondary-outline-button" onClick={() => window.alert('静态演示：这里会导出当前表格 Excel。')}><Download size={15} />导出</button></div>
-          <div className="sheet-card"><div className="sheet-header compact-header"><div><h3>{activeDebugTable?.label}</h3><p className="sheet-help">编辑/删除只影响当前前端内存，刷新后恢复初始 mock 数据。</p></div></div><div className="table-wrap"><table className="quote-table"><thead><tr><th>编码</th><th>名称</th><th>分类</th><th>规格/规则</th><th>场景</th><th className="center">操作</th></tr></thead><tbody>{filteredDebugRows.map((row) => { const editing = debugEditingId === row.code; return <tr key={row.code}><td className="mono">{row.code}</td><td>{editing ? <input className="bom-input strong-input" value={row.name} onChange={(event) => updateDebugRow(row.code, 'name', event.target.value)} /> : <span className="strong">{row.name}</span>}</td><td>{editing ? <input className="bom-input" value={row.category} onChange={(event) => updateDebugRow(row.code, 'category', event.target.value)} /> : row.category}</td><td>{editing ? <input className="bom-input" value={row.spec} onChange={(event) => updateDebugRow(row.code, 'spec', event.target.value)} /> : row.spec}</td><td>{editing ? <input className="bom-input" value={row.scene} onChange={(event) => updateDebugRow(row.code, 'scene', event.target.value)} /> : <span className="tag tag-ai">{row.scene}</span>}</td><td className="center"><button className="mini-link-button" onClick={() => setDebugEditingId(editing ? '' : row.code)}>{editing ? '完成' : '编辑'}</button><button className="mini-link-button" onClick={() => deleteDebugRow(row.code)}>删除</button></td></tr>; })}</tbody></table></div></div>
+          <div className="sheet-card"><div className="sheet-header compact-header"><div><h3>{activeDebugTable?.label}</h3></div></div><div className="table-wrap"><table className="quote-table"><thead><tr><th>编码</th><th>名称</th><th>分类</th><th>规格/规则</th><th>场景</th><th className="center">操作</th></tr></thead><tbody>{filteredDebugRows.map((row) => { const editing = debugEditingId === row.code; return <tr key={row.code}><td className="mono">{row.code}</td><td>{editing ? <input className="bom-input strong-input" value={row.name} onChange={(event) => updateDebugRow(row.code, 'name', event.target.value)} /> : <span className="strong">{row.name}</span>}</td><td>{editing ? <input className="bom-input" value={row.category} onChange={(event) => updateDebugRow(row.code, 'category', event.target.value)} /> : row.category}</td><td>{editing ? <input className="bom-input" value={row.spec} onChange={(event) => updateDebugRow(row.code, 'spec', event.target.value)} /> : row.spec}</td><td>{editing ? <input className="bom-input" value={row.scene} onChange={(event) => updateDebugRow(row.code, 'scene', event.target.value)} /> : <span className="tag tag-ai">{row.scene}</span>}</td><td className="center"><button className="mini-link-button" onClick={() => setDebugEditingId(editing ? '' : row.code)}>{editing ? '完成' : '编辑'}</button><button className="mini-link-button" onClick={() => deleteDebugRow(row.code)}>删除</button></td></tr>; })}</tbody></table></div></div>
         </section>
       </main>
     </>
   );
 
   const renderContent = () => {
-    if (activeNav === 'knowledge') return renderKnowledgeView();
+    if (activeNav === 'batch') return batchAuditProjectId ? renderAssistantView() : renderBatchImportView();
+    if (activeNav === 'knowledge') return renderHistoryProjectView();
     if (activeNav === 'rules') return renderRulesView();
     if (activeNav === 'debug') return renderDebugView();
     return renderAssistantView();
@@ -1502,8 +1882,15 @@ export default function App() {
       <aside className="sidebar">
         <div className="brand"><div className="brand-badge">AI</div><span>智能报价系统</span></div>
         <nav className="nav-list">
-          <button className={`nav-item ${activeNav === 'assistant' ? 'nav-item-active' : ''}`} onClick={() => setActiveNav('assistant')}><MessageSquare size={16} />报价助手</button>
-          <button className={`nav-item ${activeNav === 'knowledge' ? 'nav-item-active' : ''}`} onClick={() => setActiveNav('knowledge')}><BookOpen size={16} />历史报价单</button>
+          <button className={`nav-item ${activeNav === 'assistant' ? 'nav-item-active' : ''}`} onClick={() => { setBatchAuditProjectId(''); setActiveNav('assistant'); }}><MessageSquare size={16} />报价助手</button>
+          <button className={`nav-item ${activeNav === 'batch' ? 'nav-item-active' : ''}`} onClick={returnToBatchTask}><FileSpreadsheet size={16} />批量导入</button>
+          <button className={`nav-item ${activeNav === 'knowledge' ? 'nav-item-active' : ''}`} onClick={() => setActiveNav('knowledge')}><BookOpen size={16} />历史项目</button>
+          {activeNav === 'knowledge' && (
+            <div className="nav-sub-list">
+              <button className={`nav-sub-item ${historyTab === 'quotes' ? 'nav-sub-item-active' : ''}`} onClick={() => { setActiveNav('knowledge'); setHistoryTab('quotes'); }}>历史报价单</button>
+              <button className={`nav-sub-item ${historyTab === 'materials' ? 'nav-sub-item-active' : ''}`} onClick={() => { setActiveNav('knowledge'); setHistoryTab('materials'); }}>历史资料库</button>
+            </div>
+          )}
           <button className={`nav-item ${activeNav === 'rules' ? 'nav-item-active' : ''}`} onClick={() => setActiveNav('rules')}><Cpu size={16} />规则引擎</button>
           <button className={`nav-item ${activeNav === 'debug' ? 'nav-item-active' : ''}`} onClick={() => setActiveNav('debug')}><Database size={16} />数据调试</button>
         </nav>
@@ -1512,7 +1899,6 @@ export default function App() {
           <div className="recent-header">
             <span>近期报价项目</span>
             <div className="recent-header-actions">
-              <button className="icon-button subtle" title="批量导入 Excel" onClick={() => excelInputRef.current?.click()}><FileSpreadsheet size={15} /></button>
               <button className="icon-button subtle" title="新增报价项目" onClick={openCreateProjectModal}><PlusCircle size={15} /></button>
             </div>
           </div>
@@ -1529,27 +1915,28 @@ export default function App() {
         <div className="modal-backdrop">
           <div className="modal-card import-modal-card">
             <div className="modal-header">
-              <h2><FileSpreadsheet size={20} />Excel 批量导入预览</h2>
+              <h2><FileSpreadsheet size={20} />Excel 离线任务预览</h2>
               <button className="icon-button subtle" onClick={() => setImportPreview(null)}><X size={24} /></button>
             </div>
             <div className="modal-content import-modal-content">
               <div className="import-summary-bar">
                 <div className="status-chip"><span>文件</span><strong>{importPreview.fileName}</strong></div>
                 <div className="status-chip"><span>Sheet</span><strong>{importPreview.sheetName}</strong></div>
-                <div className="status-chip status-chip-accent"><span>有效项目</span><strong>{importStats.valid}</strong></div>
+                <div className="status-chip status-chip-accent"><span>报价草稿</span><strong>{importStats.valid}</strong></div>
                 <div className="status-chip"><span>警告</span><strong>{importStats.warnings}</strong></div>
                 <div className="status-chip"><span>错误</span><strong>{importStats.errors}</strong></div>
               </div>
               {importPreview.errors?.length ? <div className="import-error-box">{importPreview.errors.join('；')}</div> : null}
               <div className="table-wrap import-preview-table-wrap">
                 <table className="quote-table import-preview-table">
-                  <thead><tr><th>序号</th><th>产品类别</th><th>客户/项目名</th><th>场景</th><th>关键参数摘要</th><th>状态</th></tr></thead>
+                  <thead><tr><th>项目代码</th><th>序号</th><th>产品类别</th><th>报价草稿</th><th>场景</th><th>关键参数摘要</th><th>状态</th></tr></thead>
                   <tbody>
                     {importPreview.rows.length ? importPreview.rows.map((row) => {
                       const rowErrors = row.status.filter((item) => item.type === 'error');
                       const rowWarnings = row.status.filter((item) => item.type === 'warning');
                       return (
                         <tr key={row.id}>
+                          <td className="mono">{row.projectCode}</td>
                           <td className="mono">{row.seq}</td>
                           <td>{row.productType || '-'}</td>
                           <td><span className="strong">Excel批量导入客户</span><br /><span className="muted-small">{row.projectName}</span></td>
@@ -1561,14 +1948,14 @@ export default function App() {
                           </td>
                         </tr>
                       );
-                    }) : <tr><td colSpan={6} className="params-empty">没有识别到有效项目行</td></tr>}
+                    }) : <tr><td colSpan={7} className="params-empty">没有识别到有效项目行</td></tr>}
                   </tbody>
                 </table>
               </div>
             </div>
             <div className="modal-footer">
               <button className="secondary-button" onClick={() => setImportPreview(null)}>取消导入</button>
-              <button className="primary-button" onClick={handleGenerateImportedProjects} disabled={importStats.valid <= 0}>生成全部有效项目</button>
+              <button className="primary-button" onClick={handleGenerateImportedProjects} disabled={importStats.valid <= 0}>创建离线任务</button>
             </div>
           </div>
         </div>
