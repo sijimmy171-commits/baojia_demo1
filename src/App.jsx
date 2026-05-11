@@ -857,6 +857,8 @@ export default function App() {
   const [materialQuickFilter, setMaterialQuickFilter] = useState('all');
   const [selectedImportTaskId, setSelectedImportTaskId] = useState('');
   const [batchAuditProjectId, setBatchAuditProjectId] = useState('');
+  const [batchSearchQuery, setBatchSearchQuery] = useState('');
+  const [isImportingExcel, setIsImportingExcel] = useState(false);
   const [inputText, setInputText] = useState('');
   const [projectPage, setProjectPage] = useState(1);
   const [projectPageInput, setProjectPageInput] = useState('1');
@@ -890,6 +892,7 @@ export default function App() {
     return GROUP_LABELS.flatMap((group) =>
       projects.filter((project) => {
         if (project.dateGroup !== group) return false;
+        if (project.source === 'batch_import') return false;
         if (archivedProjectIdSet.has(project.id)) return false;
         if (!query) return true;
         const sceneLabel = getScene(project.sceneType).label;
@@ -908,6 +911,27 @@ export default function App() {
       return acc;
     }, {});
   }, [orderedFilteredProjects, projectPage]);
+
+  const sidebarBatchRecords = useMemo(() => {
+    const query = batchSearchQuery.trim().toLowerCase();
+    return importTasks.flatMap((task) =>
+      (task.records || []).map((record) => {
+        const project = projects.find((item) => item.id === record.projectId);
+        return { ...record, task, project };
+      }),
+    ).filter((item) => {
+      if (!item.project || archivedProjectIdSet.has(item.project.id)) return false;
+      if (!query) return true;
+      return [
+        item.projectCode,
+        item.seq,
+        item.productType,
+        item.sceneLabel,
+        item.summary,
+        item.project?.info?.name,
+      ].join(' ').toLowerCase().includes(query);
+    });
+  }, [archivedProjectIdSet, batchSearchQuery, importTasks, projects]);
 
   const filteredArchives = useMemo(() => {
     const query = archiveSearch.trim().toLowerCase();
@@ -1223,11 +1247,13 @@ export default function App() {
   const handleExcelFileChange = async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    setImportError('');
+    setImportError('正在解析 Excel 文件...');
+    setIsImportingExcel(true);
     try {
       const buffer = await file.arrayBuffer();
       const workbook = XLSX.read(buffer, { type: 'array' });
       const preview = parseImportWorksheet(workbook, file.name);
+      setImportError('');
       setImportPreview(preview);
       setBatchAuditProjectId('');
       setActiveNav('batch');
@@ -1236,6 +1262,7 @@ export default function App() {
       setImportError('Excel 解析失败，请确认文件为 .xls 或 .xlsx 格式。');
       setImportPreview(null);
     } finally {
+      setIsImportingExcel(false);
       event.target.value = '';
     }
   };
@@ -1614,40 +1641,42 @@ export default function App() {
     );
   };
 
+  const getRecordKeyFacts = (record) => {
+    const raw = record.raw || {};
+    const parts = (record.summary || '').split('/').map((item) => item.trim()).filter(Boolean);
+    const pick = (...headers) => headers.map((header) => findExcelValue(raw, header)).find(Boolean) || '';
+    return [
+      ['产品类别', record.productType || pick('产品类别') || '-'],
+      ['材质', parts[0] || '-'],
+      ['防爆', parts[1] || '-'],
+      ['端子品牌', pick('端子品牌') || '-'],
+      ['端子', parts[2] || '-'],
+      ['进出线方向', pick('进出线方向') || '-'],
+      ['进线格兰', pick('进线格兰数量及规格', '进线格兰数量及规格型号', '进线格兰规格') || parts[3] || '-'],
+      ['出线格兰', pick('出线格兰数量及规格', '出线格兰数量及规格型号', '出线格兰规格') || parts[4] || '-'],
+      ['堵头', pick('堵头数量及规格') || '-'],
+      ['防雨罩', pick('是否需要防雨罩') || '-'],
+      ['颜色', pick('箱体颜色') || '-'],
+    ];
+  };
+
+  const getRecordSummaryLine = (record) => {
+    const facts = getRecordKeyFacts(record);
+    const selected = ['材质', '防爆', '端子', '进出线方向', '进线格兰', '出线格兰']
+      .map((label) => facts.find(([key]) => key === label))
+      .filter((item) => item && item[1] && item[1] !== '-')
+      .map(([label, value]) => `${label}：${value}`);
+    return selected.join(' / ') || record.summary || '-';
+  };
+
   const renderBatchImportView = () => {
-    const getRecordKeyFacts = (record) => {
-      const raw = record.raw || {};
-      const parts = (record.summary || '').split('/').map((item) => item.trim()).filter(Boolean);
-      const pick = (...headers) => headers.map((header) => findExcelValue(raw, header)).find(Boolean) || '';
-      return [
-        ['产品类别', record.productType || pick('产品类别') || '-'],
-        ['材质', parts[0] || '-'],
-        ['防爆', parts[1] || '-'],
-        ['端子品牌', pick('端子品牌') || '-'],
-        ['端子', parts[2] || '-'],
-        ['进出线方向', pick('进出线方向') || '-'],
-        ['进线格兰', pick('进线格兰数量及规格', '进线格兰数量及规格型号', '进线格兰规格') || parts[3] || '-'],
-        ['出线格兰', pick('出线格兰数量及规格', '出线格兰数量及规格型号', '出线格兰规格') || parts[4] || '-'],
-        ['堵头', pick('堵头数量及规格') || '-'],
-        ['防雨罩', pick('是否需要防雨罩') || '-'],
-        ['颜色', pick('箱体颜色') || '-'],
-      ];
-    };
-    const getRecordSummaryLine = (record) => {
-      const facts = getRecordKeyFacts(record);
-      const selected = ['材质', '防爆', '端子', '进出线方向', '进线格兰', '出线格兰']
-        .map((label) => facts.find(([key]) => key === label))
-        .filter((item) => item && item[1] && item[1] !== '-')
-        .map(([label, value]) => `${label}：${value}`);
-      return selected.join(' / ') || record.summary || '-';
-    };
     return (
       <>
         <header className="page-header page-header-knowledge">
           <div>
             <h1>批量导入</h1>
           </div>
-          <button className="primary-button" onClick={() => excelInputRef.current?.click()}><FileSpreadsheet size={16} />上传 Excel 创建任务</button>
+          {renderExcelUploadTrigger()}
         </header>
         <main className="batch-layout">
           <section className="batch-task-panel">
@@ -1660,7 +1689,7 @@ export default function App() {
                   <div className="batch-progress"><i style={{ width: `${task.progress}%` }} /></div>
                   <div className="batch-task-meta"><span>报价单 {task.quoteCount}</span><span>成功 {task.successCount}</span><span>失败 {task.failedCount}</span></div>
                 </button>
-              )) : <div className="batch-empty"><FileSpreadsheet size={42} /><p>暂无导入任务</p><button className="secondary-outline-button" onClick={() => excelInputRef.current?.click()}>上传 Excel</button></div>}
+              )) : <div className="batch-empty"><FileSpreadsheet size={42} /><p>暂无导入任务</p>{renderExcelUploadTrigger('secondary-outline-button', '上传 Excel')}</div>}
             </div>
           </section>
           <section className="batch-detail-panel">
@@ -1718,7 +1747,7 @@ export default function App() {
                 </div>
               </div>
             ) : (
-              <div className="empty-state"><FileSpreadsheet size={48} /><button className="primary-button" onClick={() => excelInputRef.current?.click()}>上传 Excel 创建任务</button></div>
+              <div className="empty-state"><FileSpreadsheet size={48} />{renderExcelUploadTrigger()}</div>
             )}
           </section>
         </main>
@@ -1733,7 +1762,7 @@ export default function App() {
       <header className="page-header">
         <div className="page-header-block">
           <div className="eyebrow-row"><span className="eyebrow-chip">{currentScene.label}</span><span className="eyebrow-muted">{currentProject?.info.client}</span></div>
-          <h1>{isBatchAudit ? currentProject?.info.name : currentScene.quoteTitle}</h1>
+          <h1>{isBatchAudit ? currentProject?.info.name : '单项目报价助手'}</h1>
         </div>
         <div className="status-chip-row">
           {isBatchAudit && <div className="status-chip"><span>项目代码</span><strong>{currentProject?.importMeta?.projectCode}</strong></div>}
@@ -1877,6 +1906,72 @@ export default function App() {
     return renderAssistantView();
   };
 
+  const renderExcelUploadTrigger = (className = 'primary-button', label = '上传 Excel 创建任务') => (
+    <label
+      className={`${className} upload-trigger ${isImportingExcel ? 'upload-trigger-disabled' : ''}`}
+      htmlFor="excel-import-input"
+      onClick={(event) => {
+        if (isImportingExcel) event.preventDefault();
+      }}
+    >
+      <FileSpreadsheet size={16} />
+      {isImportingExcel ? '解析中...' : label}
+    </label>
+  );
+
+  const renderSidebarWorkspace = () => {
+    if (activeNav === 'assistant') {
+      return (
+        <div className="recent-projects">
+          <div className="recent-header">
+            <span>近期项目报价</span>
+            <div className="recent-header-actions">
+              <button className="icon-button subtle" title="新增报价项目" onClick={openCreateProjectModal}><PlusCircle size={15} /></button>
+            </div>
+          </div>
+          {importError && <div className="sidebar-alert">{importError}</div>}
+          <div className="search-box"><Search size={14} /><input type="text" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="搜索客户、项目或场景..." /></div>
+          <div className="project-groups">{GROUP_LABELS.map((groupName) => { const items = pagedProjects[groupName]; if (!items?.length) return null; return <div key={groupName} className="project-group"><div className="group-title">{groupName}</div><div className="project-list">{items.map((project) => <button key={project.id} className={`project-card ${activeProjectId === project.id ? 'project-card-active' : ''}`} onClick={() => openProject(project)}><Folder size={15} /><div className="project-meta"><span>{project.info.client}</span><small>{getScene(project.sceneType).label} / {project.info.name}</small></div></button>)}</div></div>; })}</div>
+          <div className="pagination-box"><button className="page-nav-button" onClick={() => goProjectPage(projectPage - 1)} disabled={projectPage <= 1}><ChevronLeft size={14} /></button><div className="page-input-wrap"><span>第</span><input value={projectPageInput} onChange={(event) => setProjectPageInput(event.target.value.replace(/[^0-9]/g, ''))} onKeyDown={(event) => { if (event.key === 'Enter') goProjectPage(Number(projectPageInput || 1)); }} /><span>/ {totalProjectPages} 页</span></div><button className="page-jump-button" onClick={() => goProjectPage(Number(projectPageInput || 1))}>跳转</button><button className="page-nav-button" onClick={() => goProjectPage(projectPage + 1)} disabled={projectPage >= totalProjectPages}><ChevronRight size={14} /></button></div>
+        </div>
+      );
+    }
+
+    if (activeNav === 'batch') {
+      return (
+        <div className="recent-projects batch-sidebar-workspace">
+          <div className="recent-header">
+            <span>待审核报价单</span>
+          </div>
+          {importError && <div className="sidebar-alert">{importError}</div>}
+          <div className="search-box"><Search size={14} /><input type="text" value={batchSearchQuery} onChange={(event) => setBatchSearchQuery(event.target.value)} placeholder="搜索项目代码、序号或场景..." /></div>
+          {sidebarBatchRecords.length ? (
+            <div className="batch-sidebar-list">
+              {sidebarBatchRecords.map((record) => (
+                <button key={record.id} className={`project-card batch-sidebar-card ${batchAuditProjectId === record.projectId ? 'project-card-active' : ''}`} onClick={() => openImportQuoteRecord(record)}>
+                  <FileText size={15} />
+                  <div className="project-meta batch-sidebar-meta">
+                    <span>{record.projectCode} / 报价单 #{record.seq}</span>
+                    <small>{record.sceneLabel} / {record.reviewStatus}</small>
+                    <em>{getRecordSummaryLine(record)}</em>
+                  </div>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="sidebar-empty">
+              <FileSpreadsheet size={22} />
+              <span>暂无待审核报价单</span>
+              {renderExcelUploadTrigger('secondary-outline-button', '上传 Excel')}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    return null;
+  };
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -1895,19 +1990,8 @@ export default function App() {
           <button className={`nav-item ${activeNav === 'debug' ? 'nav-item-active' : ''}`} onClick={() => setActiveNav('debug')}><Database size={16} />数据调试</button>
         </nav>
         <div className="divider" />
-        <div className="recent-projects">
-          <div className="recent-header">
-            <span>近期报价项目</span>
-            <div className="recent-header-actions">
-              <button className="icon-button subtle" title="新增报价项目" onClick={openCreateProjectModal}><PlusCircle size={15} /></button>
-            </div>
-          </div>
-          <input ref={excelInputRef} type="file" accept=".xls,.xlsx" className="hidden-file-input" onChange={handleExcelFileChange} />
-          {importError && <div className="sidebar-alert">{importError}</div>}
-          <div className="search-box"><Search size={14} /><input type="text" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="搜索客户、项目或场景..." /></div>
-          <div className="project-groups">{GROUP_LABELS.map((groupName) => { const items = pagedProjects[groupName]; if (!items?.length) return null; return <div key={groupName} className="project-group"><div className="group-title">{groupName}</div><div className="project-list">{items.map((project) => <button key={project.id} className={`project-card ${activeProjectId === project.id ? 'project-card-active' : ''}`} onClick={() => openProject(project)}><Folder size={15} /><div className="project-meta"><span>{project.info.client}</span><small>{getScene(project.sceneType).label} / {project.info.name}</small></div></button>)}</div></div>; })}</div>
-          <div className="pagination-box"><button className="page-nav-button" onClick={() => goProjectPage(projectPage - 1)} disabled={projectPage <= 1}><ChevronLeft size={14} /></button><div className="page-input-wrap"><span>第</span><input value={projectPageInput} onChange={(event) => setProjectPageInput(event.target.value.replace(/[^0-9]/g, ''))} onKeyDown={(event) => { if (event.key === 'Enter') goProjectPage(Number(projectPageInput || 1)); }} /><span>/ {totalProjectPages} 页</span></div><button className="page-jump-button" onClick={() => goProjectPage(Number(projectPageInput || 1))}>跳转</button><button className="page-nav-button" onClick={() => goProjectPage(projectPage + 1)} disabled={projectPage >= totalProjectPages}><ChevronRight size={14} /></button></div>
-        </div>
+        <input id="excel-import-input" ref={excelInputRef} type="file" accept=".xls,.xlsx" className="hidden-file-input" onChange={handleExcelFileChange} />
+        {renderSidebarWorkspace()}
       </aside>
       <div className="content-shell">{renderContent()}</div>
 
