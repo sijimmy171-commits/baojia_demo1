@@ -15,7 +15,6 @@ import {
   Download,
   FileSpreadsheet,
   FileText,
-  Folder,
   ListTodo,
   MessageSquare,
   Mic,
@@ -29,7 +28,7 @@ import {
   X,
 } from 'lucide-react';
 
-const PROJECTS_PER_PAGE = 5;
+const PROJECTS_PER_PAGE = 10;
 const GROUP_LABELS = ['今天', '昨天', '近7天'];
 
 const SCENES = {
@@ -54,9 +53,9 @@ const SCENES = {
 };
 
 const SCENE_PARAM_CATEGORIES = {
-  junction_box: ['格兰', '端子', '壳体', '防雨罩', '包装', '其他'],
-  distribution_box: ['电气配置', '进出线', '壳体', '包装', '其他'],
-  operation_column: ['操作元件', '立柱底座', '壳体', '铭牌', '包装', '其他'],
+  junction_box: ['壳体', '格兰', '端子', '防雨罩', '包装', '其他'],
+  distribution_box: ['壳体', '电气配置', '进出线', '包装', '其他'],
+  operation_column: ['壳体', '操作元件', '立柱底座', '铭牌', '包装', '其他'],
 };
 
 const FIELD_OPTIONS = {
@@ -424,6 +423,82 @@ function applyParamValue(params, category, field, value, note) {
   return next;
 }
 
+function extractTextRequirement(text = '') {
+  const source = normalizeExcelText(text).replace(/X/g, '×').replace(/x/g, '×').replace(/\*/g, '×');
+  const materialMatch = source.match(/不锈钢\s*(304|316L?|316)|铝合金|碳钢喷塑|304|316L?/i);
+  const dimensionMatch = source.match(/(\d{3,4})\s*[×*xX]\s*(\d{2,4})\s*[×*xX]\s*(\d{2,4})/);
+  const terminalQtyMatch = source.match(/(\d+)\s*(个|只)?\s*端子/);
+  const currentMatch = source.match(/(\d+(?:\.\d+)?)\s*A/i);
+  const directionMatch = source.match(/下进下出|上进下出|侧进侧出|下进上出/);
+  const rain = source.includes('防雨罩') ? (source.includes('不配防雨罩') || source.includes('不要防雨罩') ? '不需要' : '需要') : '';
+  const explosionMatch = source.match(/Ex\s*[^，。,；;\s]+(?:\s*[^，。,；;]*)?|全隔爆\s*db\s*[A-Z]+|增安型?\s*eb\s*[A-Z]+|隔爆型?\s*db\s*[A-Z]+/i);
+  const glandMatches = [...source.matchAll(/(\d+)\s*[-×xX]?\s*((?:M\d+|G\d(?:\/\d)?|NPT\d(?:\/\d)?)\s*(?:×\s*\d+(?:\.\d+)?)?)/gi)];
+  return {
+    material: materialMatch ? (materialMatch[0].match(/304|316/i) && !materialMatch[0].includes('不锈钢') ? `不锈钢 ${materialMatch[0].toUpperCase()}` : materialMatch[0].replace(/\s+/g, ' ')) : '',
+    dimension: dimensionMatch ? `${dimensionMatch[1]}×${dimensionMatch[2]}×${dimensionMatch[3]}` : '',
+    terminalQty: terminalQtyMatch?.[1] || '',
+    current: currentMatch ? `${currentMatch[1]}A` : '',
+    direction: directionMatch?.[0] || '',
+    rain,
+    explosion: explosionMatch ? explosionMatch[0].trim() : '',
+    glandRows: glandMatches.map((match, index) => ({
+      id: `text-gland-${Date.now()}-${index}`,
+      model: 'BDM-H',
+      armored: source.includes('非铠装') ? '非铠装' : source.includes('铠装') ? '铠装' : '铠装',
+      threadSpec: normalizeThreadSpec(match[2]),
+      material: materialMatch?.[0]?.includes('316') ? '316L' : materialMatch?.[0]?.includes('304') ? '304' : '',
+      installDirection: directionMatch?.[0] || '下进下出',
+      quantity: match[1],
+    })),
+  };
+}
+
+function applyRequirementTextToVersionData(data, text, sceneType = 'junction_box') {
+  const parsed = extractTextRequirement(text);
+  if (!text || !normalizeExcelText(text)) return data;
+  let nextParams = data.parameters || [];
+  nextParams = applyParamValue(nextParams, '壳体', '材质', parsed.material);
+  nextParams = applyParamValue(nextParams, '壳体', '箱体尺寸', parsed.dimension);
+  nextParams = applyParamValue(nextParams, '壳体', '防爆等级', parsed.explosion);
+  nextParams = applyParamValue(nextParams, '防雨罩', '是否需要', parsed.rain);
+  nextParams = applyParamValue(nextParams, '其他', '其他字段类型', '客户文字需求');
+  nextParams = applyParamValue(nextParams, '其他', '其他字段内容', text);
+
+  const nextData = {
+    ...data,
+    parameters: nextParams,
+    dimensions: parsed.dimension ? { ...data.dimensions, suggested: parsed.dimension } : data.dimensions,
+  };
+
+  if (sceneType === 'junction_box') {
+    if (parsed.glandRows.length) nextData.glandRows = parsed.glandRows;
+    if (parsed.terminalQty || parsed.current) {
+      const baseTerminal = data.terminalRows?.[0] || { id: 'text-terminal-1', brand: '', current: '', explosionType: '', quantity: '', wireSection: '' };
+      nextData.terminalRows = [{
+        ...baseTerminal,
+        current: parsed.current || baseTerminal.current,
+        explosionType: parsed.explosion.includes('eb') || parsed.explosion.includes('增安') ? '增安型' : baseTerminal.explosionType || '隔爆型',
+        quantity: parsed.terminalQty || baseTerminal.quantity,
+      }];
+    }
+  }
+
+  return nextData;
+}
+
+function makeCreateProjectDraft(index = 0) {
+  const scene = getScene('junction_box');
+  return {
+    id: `draft-${Date.now()}-${index}`,
+    sceneType: 'junction_box',
+    flowNo: '',
+    projectName: `${scene.application}新报价`,
+    userUnit: '',
+    developer: '',
+    requirementText: '',
+  };
+}
+
 function materialCodeForGland(threadSpec) {
   if (threadSpec.includes('M32')) return '07.03.02.08.80032L';
   if (threadSpec.includes('M25') || threadSpec.includes('G3/4')) return '07.03.02.08.80029L';
@@ -563,6 +638,8 @@ function makeHistoricalParsedRecord(importRow, task, index) {
     fileName: task.fileName,
     sheetName: task.sheetName,
     projectCode: importRow.projectCode,
+    flowNo: importRow.projectCode,
+    schemeName: importRow.projectName,
     rowNumber: importRow.rowNumber,
     sceneLabel: importRow.sceneLabel,
     createdAt: task.createdAt,
@@ -704,12 +781,21 @@ function makeProject(index, overrides = {}) {
       engineer: '测试员',
       client: isPrimary ? '连云港神宇石化机械设备...' : `江苏特种设备厂 ${index}期`,
       name: defaultNames[sceneType] || `${scene.label}报价-${index}`,
+      flowNo: `20260511-A${String(index).padStart(3, '0')}`,
     },
     chat: isPrimary || sceneType !== 'junction_box' ? makeChat(sceneType) : [],
     versions,
     data: versions.reduce((acc, version) => ({ ...acc, [version.id]: makeVersionData(sceneType, version.id) }), {}),
     ...overrides,
   };
+}
+
+function makeSidebarProjectTitle(project) {
+  const scene = getScene(project?.sceneType);
+  const baseName = String(project?.info?.client || project?.info?.name || '项目')
+    .replace(/[.。…]+$/g, '')
+    .replace(/\s+/g, '');
+  return `${baseName}${scene.label}项目`;
 }
 
 function getArchiveWiring(project, data) {
@@ -740,6 +826,8 @@ function createArchiveRecord(project, version, data, total, quoteNumber) {
     projectId: project.id,
     versionId: version.id,
     sceneType: project.sceneType,
+    flowNo: project.info.flowNo || project.importMeta?.projectCode || '',
+    schemeName: project.info.name,
     title: `${project.info.client} / ${project.info.name}`,
     client: project.info.client,
     versionLabel: version.label,
@@ -848,16 +936,25 @@ export default function App() {
   const [activeProjectId, setActiveProjectId] = useState('proj-1');
   const [activeVersionId, setActiveVersionId] = useState('v1.1');
   const [activeMainTab, setActiveMainTab] = useState('requirements');
-  const [activeSubCategory, setActiveSubCategory] = useState('格兰');
+  const [activeSubCategory, setActiveSubCategory] = useState('壳体');
   const [searchQuery, setSearchQuery] = useState('');
+  const [projectFilterOpen, setProjectFilterOpen] = useState(false);
+  const [projectFilters, setProjectFilters] = useState({ flowNo: '', projectName: '', schemeName: '', sceneType: 'all', status: 'all', dateGroup: 'all' });
+  const [projectDraftFilters, setProjectDraftFilters] = useState({ flowNo: '', projectName: '', schemeName: '', sceneType: 'all', status: 'all', dateGroup: 'all' });
   const [archiveSearch, setArchiveSearch] = useState('');
+  const [archiveFilterOpen, setArchiveFilterOpen] = useState(false);
+  const [archiveFilters, setArchiveFilters] = useState({ flowNo: '', projectName: '', schemeName: '', dimensions: '', client: '', sceneType: 'all' });
   const [archiveQuickFilter, setArchiveQuickFilter] = useState('all');
   const [historyTab, setHistoryTab] = useState('quotes');
   const [materialSearch, setMaterialSearch] = useState('');
+  const [materialFilterOpen, setMaterialFilterOpen] = useState(false);
+  const [materialFilters, setMaterialFilters] = useState({ flowNo: '', projectName: '', schemeName: '', productType: 'all', material: '', explosion: '', terminalQty: '', glandSpec: '', rainCover: 'all' });
   const [materialQuickFilter, setMaterialQuickFilter] = useState('all');
   const [selectedImportTaskId, setSelectedImportTaskId] = useState('');
   const [batchAuditProjectId, setBatchAuditProjectId] = useState('');
   const [batchSearchQuery, setBatchSearchQuery] = useState('');
+  const [batchFilterOpen, setBatchFilterOpen] = useState(false);
+  const [batchFilters, setBatchFilters] = useState({ taskId: '', fileName: '', taskStatus: 'all', quoteStatus: 'all', sceneType: 'all', material: '' });
   const [isImportingExcel, setIsImportingExcel] = useState(false);
   const [inputText, setInputText] = useState('');
   const [projectPage, setProjectPage] = useState(1);
@@ -867,6 +964,8 @@ export default function App() {
   const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
   const [createSceneType, setCreateSceneType] = useState('junction_box');
   const [createProjectName, setCreateProjectName] = useState('');
+  const [createProjectRows, setCreateProjectRows] = useState([makeCreateProjectDraft()]);
+  const [isAiDrawerOpen, setIsAiDrawerOpen] = useState(false);
   const [debugMode, setDebugMode] = useState('material');
   const [debugTableKey, setDebugTableKey] = useState(DEBUG_TABLES.material[0].key);
   const [debugSearch, setDebugSearch] = useState('');
@@ -887,6 +986,38 @@ export default function App() {
   const quoteNumber = currentVersion ? `202604070054-A001-${currentVersion.id.toUpperCase().replace('.', '')}` : '202604070054-A001-V00';
   const currentQuoteTotal = (currentData?.quotation?.items || []).reduce((sum, item) => sum + (Number(item.total) || 0), 0);
 
+  const includesText = (value, query) => String(value ?? '').toLowerCase().includes(String(query || '').trim().toLowerCase());
+  const joinText = (items) => items.filter(Boolean).join(' ').toLowerCase();
+  const matchesTextFilter = (source, value) => !String(value || '').trim() || includesText(source, value);
+  const sceneOptions = Object.entries(SCENES).map(([key, scene]) => ({ value: key, label: scene.label }));
+  const projectActiveFilterCount = Object.values(projectFilters).filter((value) => value && value !== 'all').length;
+  const batchActiveFilterCount = Object.values(batchFilters).filter((value) => value && value !== 'all').length;
+  const archiveActiveFilterCount = Object.values(archiveFilters).filter((value) => value && value !== 'all').length + (archiveQuickFilter !== 'all' ? 1 : 0);
+  const materialActiveFilterCount = Object.values(materialFilters).filter((value) => value && value !== 'all').length + (materialQuickFilter !== 'all' ? 1 : 0);
+
+  const updateProjectFilter = (key, value) => setProjectFilters((prev) => ({ ...prev, [key]: value }));
+  const updateProjectDraftFilter = (key, value) => setProjectDraftFilters((prev) => ({ ...prev, [key]: value }));
+  const updateBatchFilter = (key, value) => setBatchFilters((prev) => ({ ...prev, [key]: value }));
+  const updateArchiveFilter = (key, value) => setArchiveFilters((prev) => ({ ...prev, [key]: value }));
+  const updateMaterialFilter = (key, value) => setMaterialFilters((prev) => ({ ...prev, [key]: value }));
+  const resetProjectFilters = () => {
+    const emptyFilters = { flowNo: '', projectName: '', schemeName: '', sceneType: 'all', status: 'all', dateGroup: 'all' };
+    setSearchQuery('');
+    setProjectFilters(emptyFilters);
+    setProjectDraftFilters(emptyFilters);
+  };
+  const openProjectFilterPopover = () => {
+    setProjectDraftFilters(projectFilters);
+    setProjectFilterOpen(true);
+  };
+  const applyProjectDraftFilters = () => {
+    setProjectFilters(projectDraftFilters);
+    setProjectFilterOpen(false);
+  };
+  const resetBatchFilters = () => { setBatchSearchQuery(''); setBatchFilters({ taskId: '', fileName: '', taskStatus: 'all', quoteStatus: 'all', sceneType: 'all', material: '' }); };
+  const resetArchiveFilters = () => { setArchiveSearch(''); setArchiveQuickFilter('all'); setArchiveFilters({ flowNo: '', projectName: '', schemeName: '', dimensions: '', client: '', sceneType: 'all' }); };
+  const resetMaterialFilters = () => { setMaterialSearch(''); setMaterialQuickFilter('all'); setMaterialFilters({ flowNo: '', projectName: '', schemeName: '', productType: 'all', material: '', explosion: '', terminalQty: '', glandSpec: '', rainCover: 'all' }); };
+
   const orderedFilteredProjects = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
     return GROUP_LABELS.flatMap((group) =>
@@ -894,12 +1025,29 @@ export default function App() {
         if (project.dateGroup !== group) return false;
         if (project.source === 'batch_import') return false;
         if (archivedProjectIdSet.has(project.id)) return false;
-        if (!query) return true;
         const sceneLabel = getScene(project.sceneType).label;
-        return [project.info.client, project.info.name, sceneLabel].join(' ').toLowerCase().includes(query);
+        const versionText = (project.versions || []).map((version) => version.label).join(' ');
+        const searchableText = joinText([
+          project.info.flowNo,
+          project.info.name,
+          project.info.client,
+          project.info.userUnit,
+          project.info.developer,
+          sceneLabel,
+          versionText,
+        ]);
+        const matchesQuery = !query || searchableText.includes(query);
+        const matchesAdvanced =
+          matchesTextFilter(project.info.flowNo, projectFilters.flowNo) &&
+          matchesTextFilter(project.info.name, projectFilters.projectName) &&
+          matchesTextFilter(versionText, projectFilters.schemeName) &&
+          (projectFilters.sceneType === 'all' || project.sceneType === projectFilters.sceneType) &&
+          (projectFilters.dateGroup === 'all' || project.dateGroup === projectFilters.dateGroup) &&
+          (projectFilters.status === 'all' || (projectFilters.status === 'manual' && project.source !== 'batch_import'));
+        return matchesQuery && matchesAdvanced;
       }),
     );
-  }, [archivedProjectIdSet, projects, searchQuery]);
+  }, [archivedProjectIdSet, projectFilters, projects, searchQuery]);
 
   const totalProjectPages = Math.max(1, Math.ceil(orderedFilteredProjects.length / PROJECTS_PER_PAGE));
   const pagedProjects = useMemo(() => {
@@ -921,31 +1069,47 @@ export default function App() {
       }),
     ).filter((item) => {
       if (!item.project || archivedProjectIdSet.has(item.project.id)) return false;
-      if (!query) return true;
-      return [
+      const raw = item.raw || {};
+      const searchableText = joinText([
         item.projectCode,
         item.seq,
         item.productType,
         item.sceneLabel,
         item.summary,
+        item.reviewStatus,
         item.project?.info?.name,
-      ].join(' ').toLowerCase().includes(query);
+        item.project?.info?.flowNo,
+        item.project?.versions?.map((version) => version.label).join(' '),
+      ]);
+      const matchesQuery = !query || searchableText.includes(query);
+      const matchesAdvanced =
+        (batchFilters.quoteStatus === 'all' || item.reviewStatus === batchFilters.quoteStatus) &&
+        (batchFilters.sceneType === 'all' || item.project?.sceneType === batchFilters.sceneType) &&
+        matchesTextFilter(findExcelValue(raw, '箱体材质') || item.summary, batchFilters.material);
+      return matchesQuery && matchesAdvanced;
     });
-  }, [archivedProjectIdSet, batchSearchQuery, importTasks, projects]);
+  }, [archivedProjectIdSet, batchFilters, batchSearchQuery, importTasks, projects]);
 
   const filteredArchives = useMemo(() => {
     const query = archiveSearch.trim().toLowerCase();
     return archives.filter((item) => {
-      const queryText = [item.title, item.client, item.quoteNumber, item.productType, item.material, item.explosionLevel, item.wiring, item.dimensions, item.application].join(' ').toLowerCase();
+      const queryText = joinText([item.flowNo, item.schemeName, item.title, item.dimensions, item.client, item.quoteNumber, item.versionLabel, item.productType, item.material, item.explosionLevel, item.wiring, item.application]);
       const matchesQuery = !query || queryText.includes(query);
       const matchesFilter =
         archiveQuickFilter === 'all' ||
         (archiveQuickFilter === 'same-material' && item.material?.includes('316')) ||
         (archiveQuickFilter === 'same-explosion' && item.explosionLevel?.includes('Ex eb')) ||
         (archiveQuickFilter === 'same-structure' && item.wiring && item.wiring !== '-');
-      return matchesQuery && matchesFilter;
+      const matchesAdvanced =
+        matchesTextFilter(item.flowNo, archiveFilters.flowNo) &&
+        matchesTextFilter(item.title, archiveFilters.projectName) &&
+        matchesTextFilter(item.schemeName || item.versionLabel, archiveFilters.schemeName) &&
+        matchesTextFilter(item.dimensions, archiveFilters.dimensions) &&
+        matchesTextFilter(item.client, archiveFilters.client) &&
+        (archiveFilters.sceneType === 'all' || item.sceneType === archiveFilters.sceneType);
+      return matchesQuery && matchesFilter && matchesAdvanced;
     });
-  }, [archiveQuickFilter, archiveSearch, archives]);
+  }, [archiveFilters, archiveQuickFilter, archiveSearch, archives]);
 
   const selectedArchive = filteredArchives.find((item) => item.id === selectedArchiveId) || filteredArchives[0] || null;
   const recommendedArchive = useMemo(() => {
@@ -973,13 +1137,71 @@ export default function App() {
     return { total: rows.length, valid: valid.length, warnings, errors };
   }, [importPreview]);
 
-  const selectedImportTask = importTasks.find((task) => task.id === selectedImportTaskId) || importTasks[0] || null;
+  const filteredImportTasks = useMemo(() => {
+    const query = batchSearchQuery.trim().toLowerCase();
+    return importTasks.filter((task) => {
+      const taskText = joinText([task.id, task.fileName, task.sheetName, task.createdAt, task.status]);
+      const hasRecordMatch = (task.records || []).some((record) => {
+        const project = projects.find((item) => item.id === record.projectId);
+        return joinText([
+          record.projectCode,
+          record.seq,
+          record.productType,
+          record.sceneLabel,
+          record.summary,
+          record.reviewStatus,
+          project?.info?.flowNo,
+          project?.info?.name,
+          project?.info?.client,
+          project?.versions?.map((version) => version.label).join(' '),
+        ]).includes(query);
+      });
+      const matchesQuery = !query || taskText.includes(query) || hasRecordMatch;
+      const matchesAdvanced =
+        matchesTextFilter(task.id, batchFilters.taskId) &&
+        matchesTextFilter(task.fileName, batchFilters.fileName) &&
+        (batchFilters.taskStatus === 'all' || task.status === batchFilters.taskStatus);
+      return matchesQuery && matchesAdvanced;
+    });
+  }, [batchFilters, batchSearchQuery, importTasks, projects]);
+
+  const selectedImportTask = importTasks.find((task) => task.id === selectedImportTaskId) || filteredImportTasks[0] || importTasks[0] || null;
+
+  const selectedImportTaskRecords = useMemo(() => {
+    if (!selectedImportTask) return [];
+    const query = batchSearchQuery.trim().toLowerCase();
+    return (selectedImportTask.records || []).filter((record) => {
+      const project = projects.find((item) => item.id === record.projectId);
+      const raw = record.raw || {};
+      const searchableText = joinText([
+        record.projectCode,
+        record.seq,
+        record.productType,
+        record.sceneLabel,
+        record.summary,
+        record.reviewStatus,
+        project?.info?.flowNo,
+        project?.info?.name,
+        project?.info?.client,
+        project?.versions?.map((version) => version.label).join(' '),
+      ]);
+      const matchesQuery = !query || searchableText.includes(query);
+      const matchesAdvanced =
+        (batchFilters.quoteStatus === 'all' || record.reviewStatus === batchFilters.quoteStatus) &&
+        (batchFilters.sceneType === 'all' || project?.sceneType === batchFilters.sceneType) &&
+        matchesTextFilter(findExcelValue(raw, '箱体材质') || record.summary, batchFilters.material);
+      return matchesQuery && matchesAdvanced;
+    });
+  }, [batchFilters, batchSearchQuery, projects, selectedImportTask]);
 
   const filteredHistoricalParsedRecords = useMemo(() => {
     const query = materialSearch.trim().toLowerCase();
     return historicalParsedRecords.filter((item) => {
-      const queryText = [
+      const queryText = joinText([
         item.projectCode,
+        item.flowNo,
+        item.schemeName,
+        item.fileName,
         item.productType,
         item.sceneLabel,
         item.shellMaterial,
@@ -987,16 +1209,27 @@ export default function App() {
         item.terminalQty,
         item.inGlandSpec,
         item.outGlandSpec,
-      ].join(' ').toLowerCase();
+      ]);
       const matchesQuery = !query || queryText.includes(query);
       const matchesFilter =
         materialQuickFilter === 'all' ||
         (materialQuickFilter === 'junction_box' && item.productType?.includes('接线箱')) ||
         (materialQuickFilter === 'material' && item.shellMaterial?.includes('不锈钢')) ||
         (materialQuickFilter === 'gland' && [item.inGlandSpec, item.outGlandSpec].join(' ').trim());
-      return matchesQuery && matchesFilter;
+      const glandText = [item.inGlandSpec, item.outGlandSpec].join(' ');
+      const matchesAdvanced =
+        matchesTextFilter(item.flowNo || item.projectCode, materialFilters.flowNo) &&
+        matchesTextFilter(item.fileName, materialFilters.projectName) &&
+        matchesTextFilter(item.schemeName, materialFilters.schemeName) &&
+        (materialFilters.productType === 'all' || item.productType === materialFilters.productType) &&
+        matchesTextFilter(item.shellMaterial, materialFilters.material) &&
+        matchesTextFilter(item.explosionMark, materialFilters.explosion) &&
+        matchesTextFilter(item.terminalQty, materialFilters.terminalQty) &&
+        matchesTextFilter(glandText, materialFilters.glandSpec) &&
+        (materialFilters.rainCover === 'all' || item.rainCover === materialFilters.rainCover);
+      return matchesQuery && matchesFilter && matchesAdvanced;
     });
-  }, [historicalParsedRecords, materialQuickFilter, materialSearch]);
+  }, [historicalParsedRecords, materialFilters, materialQuickFilter, materialSearch]);
 
   useEffect(() => {
     if (currentProject && !currentProject.versions.some((version) => version.id === activeVersionId)) {
@@ -1032,6 +1265,12 @@ export default function App() {
       setSelectedImportTaskId(importTasks[0].id);
     }
   }, [importTasks, selectedImportTaskId]);
+
+  useEffect(() => {
+    if (filteredImportTasks.length && !filteredImportTasks.some((task) => task.id === selectedImportTaskId)) {
+      setSelectedImportTaskId(filteredImportTasks[0].id);
+    }
+  }, [filteredImportTasks, selectedImportTaskId]);
 
   useEffect(() => {
     const tables = debugTables[debugMode] || [];
@@ -1092,9 +1331,34 @@ export default function App() {
     if (!text || !currentProject) return;
     const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
     const userMessage = { id: Date.now(), sender: 'user', text, time };
-    const aiMessage = { id: Date.now() + 1, sender: 'ai', text: `已记录到${currentScene.label}项目：${text}。我会沿当前场景模板继续完善参数、BOM 和报价。`, time };
-    setProjects((prev) => prev.map((project) => (project.id === currentProject.id ? { ...project, chat: [...project.chat, userMessage, aiMessage] } : project)));
+    const parsed = extractTextRequirement(text);
+    const parsedLabels = [
+      parsed.material && `材质 ${parsed.material}`,
+      parsed.dimension && `尺寸 ${parsed.dimension}`,
+      parsed.explosion && `防爆 ${parsed.explosion}`,
+      parsed.terminalQty && `端子 ${parsed.terminalQty}个`,
+      parsed.glandRows.length && `格兰 ${parsed.glandRows.map((row) => `${row.quantity}-${row.threadSpec}`).join('、')}`,
+      parsed.rain && `防雨罩 ${parsed.rain}`,
+    ].filter(Boolean);
+    const aiMessage = { id: Date.now() + 1, sender: 'ai', text: parsedLabels.length ? `已自动识别并填充：${parsedLabels.join('；')}。` : `已记录到${currentScene.label}项目，未识别到可自动填充的结构化参数。`, time };
+    setProjects((prev) => prev.map((project) => {
+      if (project.id !== currentProject.id) return project;
+      const latest = project.versions.find((version) => version.id === activeVersionId) || project.versions[project.versions.length - 1];
+      return {
+        ...project,
+        chat: [...project.chat, userMessage, aiMessage],
+        data: {
+          ...project.data,
+          [latest.id]: applyRequirementTextToVersionData(project.data[latest.id], text, project.sceneType),
+        },
+      };
+    }));
     setInputText('');
+  };
+
+  const handleClearCurrentChat = () => {
+    if (!currentProject) return;
+    setProjects((prev) => prev.map((project) => (project.id === currentProject.id ? { ...project, chat: [] } : project)));
   };
 
   const handleVersionChange = (nextVersionId) => {
@@ -1195,14 +1459,34 @@ export default function App() {
   };
 
   const openCreateProjectModal = () => {
-    const defaultSceneType = 'junction_box';
-    const defaultScene = getScene(defaultSceneType);
-    setCreateSceneType(defaultSceneType);
-    setCreateProjectName(`${defaultScene.application}新报价`);
+    const draft = makeCreateProjectDraft();
+    setCreateSceneType(draft.sceneType);
+    setCreateProjectName(draft.projectName);
+    setCreateProjectRows([draft]);
     setIsCreateProjectOpen(true);
   };
 
-  const handleSelectCreateScene = (sceneType) => {
+  const updateCreateProjectRow = (rowId, field, value) => {
+    setCreateProjectRows((prev) => prev.map((row) => {
+      if (row.id !== rowId) return row;
+      if (field === 'sceneType') {
+        const scene = getScene(value);
+        const isAutoName = Object.values(SCENES).some((item) => row.projectName.trim() === `${item.application}新报价`);
+        return { ...row, sceneType: value, projectName: !row.projectName.trim() || isAutoName ? `${scene.application}新报价` : row.projectName };
+      }
+      return { ...row, [field]: value };
+    }));
+  };
+
+  const addCreateProjectRow = () => {
+    setCreateProjectRows((prev) => [...prev, makeCreateProjectDraft(prev.length)]);
+  };
+
+  const removeCreateProjectRow = (rowId) => {
+    setCreateProjectRows((prev) => (prev.length > 1 ? prev.filter((row) => row.id !== rowId) : prev));
+  };
+
+  const handleSelectCreateScene = (sceneType, rowId = createProjectRows[0]?.id) => {
     const scene = getScene(sceneType);
     setCreateSceneType(sceneType);
     setCreateProjectName((prev) => {
@@ -1210,38 +1494,68 @@ export default function App() {
       const isAutoName = Object.values(SCENES).some((item) => trimmed === `${item.application}新报价`);
       return !trimmed || isAutoName ? `${scene.application}新报价` : prev;
     });
+    if (rowId) updateCreateProjectRow(rowId, 'sceneType', sceneType);
   };
 
   const handleCreateProject = () => {
+    const validRows = createProjectRows.map((row) => ({
+      ...row,
+      flowNo: row.flowNo.trim(),
+      projectName: row.projectName.trim(),
+      requirementText: row.requirementText.trim(),
+    }));
+    if (validRows.some((row) => !row.flowNo || !row.projectName)) {
+      window.alert('流程号和项目名称为必填项，请补齐后再创建。');
+      return;
+    }
     const now = new Date();
-    const id = `proj-${Date.now()}`;
     const timestamp = now.toLocaleString('zh-CN', { hour12: false }).replace(/\//g, '-');
-    const version = { id: 'v1.0', label: 'V1.0 首版报价', timestamp, isLatest: true };
-    const scene = getScene(createSceneType);
-    const projectName = createProjectName.trim() || `${scene.application}新报价`;
-    const newProject = {
-      id,
-      sceneType: createSceneType,
-      dateGroup: '今天',
-      info: {
-        engineer: '测试员',
-        client: '新客户项目',
-        name: projectName,
-      },
-      chat: [
-        { id: Date.now() + 1, sender: 'ai', text: `新${scene.label}项目已创建。您可以输入客户需求，我会按${scene.label}模板维护参数、BOM 和正式报价单。`, time: now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }) },
-      ],
-      versions: [version],
-      data: { [version.id]: makeVersionData(createSceneType, version.id) },
-    };
-    setProjects((prev) => [newProject, ...prev]);
-    setActiveProjectId(id);
-    setActiveVersionId(version.id);
+    const time = now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+    const newProjects = validRows.map((row, index) => {
+      const id = `proj-${Date.now()}-${index}`;
+      const version = { id: 'v1.0', label: 'V1.0 首版报价', timestamp, isLatest: true };
+      const scene = getScene(row.sceneType);
+      const baseData = makeVersionData(row.sceneType, version.id);
+      const data = applyRequirementTextToVersionData(baseData, row.requirementText, row.sceneType);
+      const parsed = extractTextRequirement(row.requirementText);
+      const parsedLabels = [
+        parsed.material && `材质 ${parsed.material}`,
+        parsed.dimension && `尺寸 ${parsed.dimension}`,
+        parsed.terminalQty && `端子 ${parsed.terminalQty}个`,
+        parsed.glandRows.length && `格兰 ${parsed.glandRows.map((item) => `${item.quantity}-${item.threadSpec}`).join('、')}`,
+      ].filter(Boolean);
+      return {
+        id,
+        sceneType: row.sceneType,
+        dateGroup: '今天',
+        info: {
+          engineer: '测试员',
+          client: row.userUnit || '新客户项目',
+          name: row.projectName || `${scene.application}新报价`,
+          flowNo: row.flowNo,
+          userUnit: row.userUnit,
+          developer: row.developer,
+          requirementText: row.requirementText,
+        },
+        chat: [
+          { id: Date.now() + index * 10 + 1, sender: 'ai', text: `已创建${scene.label}项目，流程号：${row.flowNo}。`, time },
+          row.requirementText ? { id: Date.now() + index * 10 + 2, sender: 'user', text: row.requirementText, time } : null,
+          row.requirementText ? { id: Date.now() + index * 10 + 3, sender: 'ai', text: parsedLabels.length ? `已从创建需求自动填充：${parsedLabels.join('；')}。` : '已记录创建需求，等待后续补充结构化参数。', time } : null,
+        ].filter(Boolean),
+        versions: [version],
+        data: { [version.id]: data },
+      };
+    });
+    const firstProject = newProjects[0];
+    setProjects((prev) => [...newProjects, ...prev]);
+    setActiveProjectId(firstProject.id);
+    setActiveVersionId(firstProject.versions[0].id);
     setActiveMainTab('requirements');
-    setActiveSubCategory(SCENE_PARAM_CATEGORIES[createSceneType][0]);
+    setActiveSubCategory(SCENE_PARAM_CATEGORIES[firstProject.sceneType][0]);
     setActiveNav('assistant');
     setIsCreateProjectOpen(false);
     setCreateProjectName('');
+    setCreateProjectRows([makeCreateProjectDraft()]);
   };
 
   const handleExcelFileChange = async (event) => {
@@ -1328,6 +1642,25 @@ export default function App() {
     setActiveSubCategory((SCENE_PARAM_CATEGORIES[project.sceneType] || SCENE_PARAM_CATEGORIES.junction_box)[0]);
     setBatchAuditProjectId('');
     setActiveNav('assistant');
+  };
+
+  const handleDeleteProject = (project, event) => {
+    event?.stopPropagation();
+    if (!project || project.source === 'batch_import') return;
+    const projectKey = project.info.flowNo || project.info.name || '当前项目';
+    if (!window.confirm(`确认删除项目 ${projectKey}？`)) return;
+    const nextProject =
+      orderedFilteredProjects.find((item) => item.id !== project.id) ||
+      projects.find((item) => item.id !== project.id && item.source !== 'batch_import' && !archivedProjectIdSet.has(item.id));
+    setProjects((prev) => prev.filter((item) => item.id !== project.id));
+    setArchivedProjectIds((prev) => prev.filter((id) => id !== project.id));
+    if (activeProjectId === project.id && nextProject) {
+      const latest = nextProject.versions.find((version) => version.isLatest) || nextProject.versions[nextProject.versions.length - 1];
+      setActiveProjectId(nextProject.id);
+      setActiveVersionId(latest.id);
+      setActiveSubCategory((SCENE_PARAM_CATEGORIES[nextProject.sceneType] || SCENE_PARAM_CATEGORIES.junction_box)[0]);
+    }
+    setActiveMainTab('requirements');
   };
 
   const openProjectForBatchAudit = (project) => {
@@ -1418,7 +1751,7 @@ export default function App() {
   const renderGlandConfig = () => (
     <div className="requirements-inner">
       <div className="config-card-shell">
-        <div className="config-card-header"><h4>格兰配置（多型号 × 数量）</h4><button className="secondary-outline-button" onClick={() => window.alert('静态演示：已按当前格兰参数执行物料匹配测试。')}>匹配物料测试</button></div>
+        <div className="config-card-header"><h4>格兰配置（多型号 × 数量）</h4></div>
         <div className="config-card-body">
           <div className="config-grid-headings config-grid-gland-online">
             {['数量', '型号+型号描述', '方向', '外螺纹', '内螺纹', '材质', '密封圈范围', '操作'].map((item, index) => <div key={item} className={`config-grid-head ${[0, 1, 2, 3].includes(index) ? 'required' : ''}`}>{item}</div>)}
@@ -1442,17 +1775,17 @@ export default function App() {
         </div>
       </div>
       <div className="config-card-shell">
-        <div className="config-card-header"><h4>堵头配置（BDT）</h4><button className="secondary-outline-button" onClick={() => window.alert('静态演示：已执行堵头物料匹配测试。')}>匹配物料测试</button></div>
+        <div className="config-card-header"><h4>堵头配置（BDT）</h4></div>
         <div className="table-wrap compact-config-table"><table className="quote-table"><thead><tr>{['状态', '型号', '螺纹规格', '材质', '是否开孔', '安装方向', '数量', '操作'].map((item) => <th key={item}>{item}</th>)}</tr></thead><tbody>{renderSmallEmptyRow(8, '暂无堵头')}</tbody></table></div>
         <div className="config-footer-row"><button className="secondary-outline-button"><PlusCircle size={15} />新增一行</button><span>型号、螺纹规格、是否开孔、数量为必填参数；开孔时增安型配锁母，防爆型配凸台</span></div>
       </div>
       <div className="config-card-shell">
-        <div className="config-card-header"><h4>呼吸阀配置（BHX系列）</h4><button className="secondary-outline-button" onClick={() => window.alert('静态演示：已执行呼吸阀匹配测试。')}>匹配物料测试</button></div>
+        <div className="config-card-header"><h4>呼吸阀配置（BHX系列）</h4></div>
         <div className="table-wrap compact-config-table"><table className="quote-table"><thead><tr>{['状态', '型号', '螺纹规格', '材质', '开孔', '方向', '数量', '操作'].map((item) => <th key={item}>{item}</th>)}</tr></thead><tbody>{renderSmallEmptyRow(8, '暂无呼吸阀')}</tbody></table></div>
         <div className="config-footer-row"><button className="secondary-outline-button"><PlusCircle size={15} />新增一行</button><span>型号、数量为必填参数</span></div>
       </div>
       <div className="config-card-shell">
-        <div className="config-card-header"><h4>关联物料配件</h4><button className="secondary-outline-button" onClick={() => window.alert('静态演示：已根据格兰行匹配锁母/凸台配件。')}>配件匹配测试</button></div>
+        <div className="config-card-header"><h4>关联物料配件</h4></div>
         <div className="accessory-block-title">系统匹配（仅可删除）</div>
         <div className="table-wrap compact-config-table"><table className="quote-table"><thead><tr>{['来源', '配件类别', '物料编码', '物料名称', '数量', '操作'].map((item) => <th key={item}>{item}</th>)}</tr></thead><tbody>{(currentData?.glandRows || []).length ? (currentData.glandRows || []).map((row, index) => <tr key={`acc-${row.id}`}><td>格兰第{index + 1}行</td><td>凸台</td><td className="mono">03.08.01.600209</td><td><span className="strong">通头焊接凸台_{row.threadSpec || 'M32×1.5'}_3mm_{row.material || '304'}</span></td><td>{row.quantity || 1}</td><td><button className="icon-button danger"><Trash2 size={16} /></button></td></tr>) : renderSmallEmptyRow(6, '暂无系统匹配配件')}</tbody></table></div>
         <div className="accessory-block-title">用户自选配件（锁母 / 凸台）</div>
@@ -1465,7 +1798,7 @@ export default function App() {
   const renderTerminalConfig = () => (
     <div className="requirements-inner">
       <div className="config-card-shell">
-        <div className="config-card-header"><h4>端子配置</h4><button className="secondary-outline-button" onClick={() => window.alert('静态演示：已按端子参数执行物料匹配测试。')}>匹配物料测试</button></div>
+        <div className="config-card-header"><h4>端子配置</h4></div>
         <div className="config-card-body">
           <div className="config-grid-headings config-grid-terminal-online">
             {['状态', '数量', '防爆', '额定电流下限(A)+导线截面', '品牌', '端子类型', '本安', '接地', '双层', '操作'].map((item, index) => <div key={item} className={`config-grid-head ${[1, 2, 3].includes(index) ? 'required' : ''}`}>{item}</div>)}
@@ -1491,7 +1824,7 @@ export default function App() {
         </div>
       </div>
       <div className="config-card-shell">
-        <div className="config-card-header"><h4>端子关联配件（挡板 / 尾顶）</h4><button className="secondary-outline-button" onClick={() => window.alert('静态演示：已执行端子配件匹配测试。')}>匹配物料测试</button></div>
+        <div className="config-card-header"><h4>端子关联配件（挡板 / 尾顶）</h4></div>
         <div className="accessory-block-title">系统匹配（仅可删除）</div>
         <div className="config-empty-line">暂无系统匹配端子配件</div>
         {['用户自选 — 挡板', '用户自选 — 尾顶'].map((title) => <div key={title} className="terminal-accessory-section"><div className="accessory-block-title">{title}</div><div className="table-wrap compact-config-table"><table className="quote-table"><thead><tr>{['来源端子', '规格说明', '数量', '匹配依据', '已解析物料', '解析', '操作'].map((item) => <th key={item}>{item}</th>)}</tr></thead><tbody>{renderSmallEmptyRow(7, `暂无${title.includes('挡板') ? '挡板' : '尾顶'}自选行`)}</tbody></table></div><div className="config-footer-row"><button className="secondary-outline-button"><PlusCircle size={15} />新增一行</button></div></div>)}
@@ -1501,10 +1834,17 @@ export default function App() {
 
   const renderShellConfig = () => {
     const fields = ['材质', '防爆等级', '箱体尺寸', '厚度', '接合面类型'];
+    const sideCounts = (currentData?.glandRows || []).reduce((acc, row) => {
+      const direction = row.installDirection || '未指定方向';
+      acc[direction] = (acc[direction] || 0) + (Number(row.quantity) || 0);
+      return acc;
+    }, {});
+    const overLimitSides = Object.entries(sideCounts).filter(([, count]) => count > 30);
     return (
       <div className="requirements-inner">
         <div className="config-card-shell">
-          <div className="config-card-header"><h4>壳体参数</h4><div className="header-action-row"><button className="secondary-outline-button" onClick={() => window.alert('静态演示：已按材质和防爆等级智能校验壳体参数。')}>智能校验填充</button><button className="secondary-outline-button" onClick={() => window.alert('静态演示：已按当前需求执行智能尺寸匹配。')}>智能尺寸匹配</button></div></div>
+          <div className="config-card-header"><h4>壳体参数</h4></div>
+          {overLimitSides.length ? <div className="inline-warning">单面格兰数量超过 30 个：{overLimitSides.map(([side, count]) => `${side} ${count}个`).join('；')}，建议复核壳体尺寸或拆分布置。</div> : null}
           <div className="online-field-grid">
             {fields.map((field) => {
               const param = field === '接合面类型' ? null : getParam('壳体', field);
@@ -1523,7 +1863,7 @@ export default function App() {
     return (
       <div className="requirements-inner">
         <div className="config-card-shell">
-          <div className="config-card-header"><h4>防雨罩（可选，与预制库同步）</h4><button className="secondary-outline-button" onClick={() => window.alert('静态演示：已按壳体尺寸匹配防雨罩。')}>按壳体匹配防雨罩</button></div>
+          <div className="config-card-header"><h4>防雨罩（可选，与预制库同步）</h4></div>
           <div className="switch-line"><span>需要防雨罩：</span><button className={`toggle-pill ${enabled ? 'toggle-pill-on' : ''}`} onClick={() => required && updateParamValue(required.id, enabled ? '不需要' : '需要')}>{enabled ? '开启' : '关闭'}</button><small>关闭后不参与防雨罩物料匹配；已填写的筛选条件会保留</small></div>
           <div className="online-field-grid">
             {fields.map((field) => {
@@ -1539,7 +1879,7 @@ export default function App() {
   const renderPackagingConfig = () => (
     <div className="requirements-inner">
       <div className="config-card-shell">
-        <div className="config-card-header"><h4>包装配置</h4><button className="secondary-outline-button" onClick={() => window.alert('静态演示：已按箱体尺寸智能推荐包装。')}>智能推荐包装</button></div>
+        <div className="config-card-header"><h4>包装配置</h4></div>
         <div className="online-field-grid">
           {['包装方式', '包装尺寸'].map((field) => {
             const param = getParam('包装', field);
@@ -1574,10 +1914,16 @@ export default function App() {
     <div className="stack-layout">
       <div className="panel-card panel-card-p0">
         <div className="requirements-action-bar"><button className="primary-button ghost-primary" onClick={() => window.alert('静态演示：已执行智能物料匹配。')}>智能物料匹配</button><button className="bom-jump-button" onClick={() => setActiveMainTab('bom')}>生成BOM物料</button></div>
-        <div className="subtabs">{currentCategories.map((category) => <button key={category} className={`subtab ${activeSubCategory === category ? 'subtab-active' : ''}`} onClick={() => setActiveSubCategory(category)}>{category}{categoryHasMissing(category) && <span className="subtab-dot" />}</button>)}</div>
-        {activeSubCategory === '格兰' && renderGlandConfig()}
-        {activeSubCategory === '端子' && renderTerminalConfig()}
-        {!['格兰', '端子'].includes(activeSubCategory) && renderGenericCategoryConfig(activeSubCategory)}
+        <div className="requirements-all-in-one">
+          {currentCategories.map((category) => (
+            <section key={category} className="requirements-section">
+              <div className="requirements-section-title"><span>{category}</span>{categoryHasMissing(category) && <em>有必填项待补</em>}</div>
+              {category === '格兰' && renderGlandConfig()}
+              {category === '端子' && renderTerminalConfig()}
+              {!['格兰', '端子'].includes(category) && renderGenericCategoryConfig(category)}
+            </section>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -1669,6 +2015,13 @@ export default function App() {
     return selected.join(' / ') || record.summary || '-';
   };
 
+  const renderFilterSummary = (count, onReset) => count > 0 ? (
+    <div className="filter-chip-row">
+      <span>已启用 {count} 个筛选条件</span>
+      <button type="button" onClick={onReset}>清空</button>
+    </div>
+  ) : null;
+
   const renderBatchImportView = () => {
     return (
       <>
@@ -1678,18 +2031,52 @@ export default function App() {
           </div>
           {renderExcelUploadTrigger()}
         </header>
-        <main className="batch-layout">
-          <section className="batch-task-panel">
-            <div className="batch-panel-head"><strong>离线任务列表</strong><span>{importTasks.length} 个任务</span></div>
-            <div className="batch-task-list">
-              {importTasks.length ? importTasks.map((task) => (
-                <button key={task.id} className={`batch-task-card ${selectedImportTask?.id === task.id ? 'batch-task-card-active' : ''}`} onClick={() => setSelectedImportTaskId(task.id)}>
-                  <div className="batch-task-top"><strong>{task.id}</strong><span className="tag tag-ai">{task.status}</span></div>
-                  <p>{task.fileName}</p>
-                  <div className="batch-progress"><i style={{ width: `${task.progress}%` }} /></div>
-                  <div className="batch-task-meta"><span>报价单 {task.quoteCount}</span><span>成功 {task.successCount}</span><span>失败 {task.failedCount}</span></div>
-                </button>
-              )) : <div className="batch-empty"><FileSpreadsheet size={42} /><p>暂无导入任务</p>{renderExcelUploadTrigger('secondary-outline-button', '上传 Excel')}</div>}
+        <main className="batch-workbench-layout">
+          <section className="sheet-card batch-task-table-card">
+            <div className="sheet-header compact-header">
+              <div>
+                <h3>离线任务</h3>
+                <div className="sheet-meta"><span>{filteredImportTasks.length} 个任务</span><span>选中任务后在下方查看报价草稿</span></div>
+              </div>
+              <div className="filter-toolbar-main">
+                <div className="archive-sidebar-search batch-search-box">
+                  <Search size={16} />
+                  <input value={batchSearchQuery} onChange={(event) => setBatchSearchQuery(event.target.value)} placeholder="搜索任务号、文件名、流程号、项目名称、方案名称..." />
+                </div>
+                <button className={`filter-toggle-button ${batchFilterOpen ? 'filter-toggle-button-active' : ''}`} onClick={() => setBatchFilterOpen((prev) => !prev)}>筛选{batchActiveFilterCount ? ` ${batchActiveFilterCount}` : ''}</button>
+              </div>
+            </div>
+            {batchFilterOpen && (
+              <div className="advanced-filter-panel advanced-filter-panel-4">
+                <label><span>任务号</span><input value={batchFilters.taskId} onChange={(event) => updateBatchFilter('taskId', event.target.value)} placeholder="IMPORT-..." /></label>
+                <label><span>文件名</span><input value={batchFilters.fileName} onChange={(event) => updateBatchFilter('fileName', event.target.value)} placeholder="Excel 文件名" /></label>
+                <label><span>任务状态</span><select value={batchFilters.taskStatus} onChange={(event) => updateBatchFilter('taskStatus', event.target.value)}><option value="all">全部</option><option value="等待处理">等待处理</option><option value="AI解析中">AI解析中</option><option value="生成报价草稿">生成报价草稿</option><option value="待审核">待审核</option></select></label>
+                <label><span>审核状态</span><select value={batchFilters.quoteStatus} onChange={(event) => updateBatchFilter('quoteStatus', event.target.value)}><option value="all">全部</option><option value="未审核">未审核</option><option value="审核中">审核中</option><option value="已确认">已确认</option></select></label>
+                <label><span>场景</span><select value={batchFilters.sceneType} onChange={(event) => updateBatchFilter('sceneType', event.target.value)}><option value="all">全部</option>{sceneOptions.map((scene) => <option key={scene.value} value={scene.value}>{scene.label}</option>)}</select></label>
+                <label><span>材质</span><input value={batchFilters.material} onChange={(event) => updateBatchFilter('material', event.target.value)} placeholder="不锈钢 / 铝合金" /></label>
+                <div className="filter-actions"><button className="secondary-outline-button" onClick={resetBatchFilters}>重置</button></div>
+              </div>
+            )}
+            {renderFilterSummary(batchActiveFilterCount, resetBatchFilters)}
+            <div className="table-wrap batch-task-table-wrap">
+              <table className="quote-table batch-task-table">
+                <thead><tr><th>任务号</th><th>文件名</th><th>创建时间</th><th>总行数</th><th>报价单</th><th>成功</th><th>失败</th><th>状态</th><th>进度</th></tr></thead>
+                <tbody>
+                  {filteredImportTasks.length ? filteredImportTasks.map((task) => (
+                    <tr key={task.id} className={`batch-task-row ${selectedImportTask?.id === task.id ? 'batch-task-row-active' : ''}`} onClick={() => setSelectedImportTaskId(task.id)}>
+                      <td className="mono strong">{task.id}</td>
+                      <td><span className="strong">{task.fileName}</span><br /><span className="muted-small">{task.sheetName}</span></td>
+                      <td>{task.createdAt}</td>
+                      <td>{task.totalRows}</td>
+                      <td>{task.quoteCount}</td>
+                      <td>{task.successCount}</td>
+                      <td>{task.failedCount}</td>
+                      <td><span className="tag tag-ai">{task.status}</span></td>
+                      <td><div className="batch-progress batch-progress-inline"><i style={{ width: `${task.progress}%` }} /></div></td>
+                    </tr>
+                  )) : <tr><td colSpan={9} className="params-empty">暂无匹配的导入任务</td></tr>}
+                </tbody>
+              </table>
             </div>
           </section>
           <section className="batch-detail-panel">
@@ -1697,7 +2084,7 @@ export default function App() {
               <div className="sheet-card">
                 <div className="sheet-header compact-header">
                   <div>
-                    <h3>{selectedImportTask.fileName}</h3>
+                    <h3>报价草稿列表</h3>
                     <div className="sheet-meta"><span>{selectedImportTask.sheetName}</span><span>{selectedImportTask.createdAt}</span></div>
                   </div>
                   <div className="status-chip-row">
@@ -1721,7 +2108,7 @@ export default function App() {
                       </tr>
                     </thead>
                     <tbody>
-                      {(selectedImportTask.records || []).map((record) => {
+                      {selectedImportTaskRecords.length ? selectedImportTaskRecords.map((record) => {
                         const project = projects.find((item) => item.id === record.projectId);
                         const warnings = (record.status || []).filter((item) => item.type === 'warning');
                         return (
@@ -1741,13 +2128,13 @@ export default function App() {
                             <td className="center"><button className="mini-link-button mini-link-button-primary" onClick={(event) => { event.stopPropagation(); openImportQuoteRecord(record); }}>进入审核</button></td>
                           </tr>
                         );
-                      })}
+                      }) : <tr><td colSpan={8} className="params-empty">暂无匹配的报价草稿</td></tr>}
                     </tbody>
                   </table>
                 </div>
               </div>
             ) : (
-              <div className="empty-state"><FileSpreadsheet size={48} />{renderExcelUploadTrigger()}</div>
+              <div className="empty-state"><FileSpreadsheet size={48} />{renderExcelUploadTrigger('secondary-outline-button', '上传 Excel')}</div>
             )}
           </section>
         </main>
@@ -1759,32 +2146,22 @@ export default function App() {
     const isBatchAudit = activeNav === 'batch' && batchAuditProjectId && currentProject?.id === batchAuditProjectId && currentProject?.source === 'batch_import';
     return (
       <>
-      <header className="page-header">
-        <div className="page-header-block">
-          <div className="eyebrow-row"><span className="eyebrow-chip">{currentScene.label}</span><span className="eyebrow-muted">{currentProject?.info.client}</span></div>
-          <h1>{isBatchAudit ? currentProject?.info.name : '单项目报价助手'}</h1>
+      <header className="page-header quote-object-header">
+        <div className="object-heading">
+          <div className="object-title-line">
+            <span className="eyebrow-chip">{currentScene.label}</span>
+            <h1>{isBatchAudit ? currentProject?.info.name : '项目报价助手'}</h1>
+          </div>
         </div>
-        <div className="status-chip-row">
-          {isBatchAudit && <div className="status-chip"><span>项目代码</span><strong>{currentProject?.importMeta?.projectCode}</strong></div>}
-          <div className="status-chip status-chip-accent"><span>当前场景</span><strong>{currentScene.application}</strong></div>
-          <div className="status-chip"><span>报价版本</span><strong>{currentVersion?.label}</strong></div>
-          <div className="status-chip"><span>报价金额</span><strong>¥{currentQuoteTotal.toLocaleString()}</strong></div>
+        <div className="object-actions">
+          <select value={currentVersion?.id} onChange={(event) => handleVersionChange(event.target.value)} className="quote-version-select compact-header-version-select">{currentProject?.versions.map((version) => <option key={version.id} value={version.id}>{version.label} - {version.timestamp.split(' ')[1]}</option>)}</select>
+          <button className="secondary-outline-button" onClick={handleCreateQuoteVersion}><PlusCircle size={15} />新增报价版本</button>
+          <button className="secondary-outline-button ai-assistant-trigger" onClick={() => setIsAiDrawerOpen(true)}><MessageSquare size={15} />AI 助手</button>
           {isBatchAudit && <button className="secondary-outline-button header-return-button" onClick={returnToBatchTask}><ArrowLeft size={15} />返回批量任务</button>}
         </div>
       </header>
       <main className={`assistant-layout ${isBatchAudit ? 'assistant-layout-audit' : ''}`}>
-        {!isBatchAudit && (
-          <section className="chat-panel">
-            <div className="chat-panel-head">
-              <div className="chat-project-meta"><strong>{currentProject?.info.engineer}</strong><span>{currentProject?.info.client}</span></div>
-              <div className="assistant-mini-strip"><span className="assistant-mini-pill">{currentScene.label}</span><span className="assistant-mini-pill">{currentProject?.info.name}</span></div>
-            </div>
-            <div className="chat-scroll" ref={chatScrollRef}>{(currentChat || []).map((item) => <div key={item.id} className={`chat-row ${item.sender === 'user' ? 'chat-row-user' : 'chat-row-ai'}`}>{item.sender === 'ai' && <div className="chat-avatar">AI</div>}<div className={`chat-bubble ${item.sender === 'user' ? 'chat-bubble-user' : 'chat-bubble-ai'}`}>{renderRichMessage(item.text, item.sender === 'ai')}</div></div>)}</div>
-            <div className="chat-input-bar"><button className="icon-button subtle"><Mic size={16} /></button><button className="icon-button subtle"><Paperclip size={16} /></button><input value={inputText} onChange={(event) => setInputText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') handleSendMessage(); }} placeholder={`补充${currentScene.label}参数或记录客户反馈...`} /><button className="send-button" onClick={handleSendMessage}><Send size={18} /></button></div>
-          </section>
-        )}
         <section className="quotation-panel">
-          <div className="quote-version-bar"><span className="quote-version-label">当前报价版本</span><div className="quote-version-actions"><select value={currentVersion?.id} onChange={(event) => handleVersionChange(event.target.value)} className="quote-version-select">{currentProject?.versions.map((version) => <option key={version.id} value={version.id}>{version.label} - {version.timestamp.split(' ')[1]}</option>)}</select><button className="secondary-outline-button" onClick={handleCreateQuoteVersion}><PlusCircle size={15} />新增报价版本</button></div></div>
           <div className="tabs"><button className={`tab ${activeMainTab === 'requirements' ? 'tab-active' : ''}`} onClick={() => setActiveMainTab('requirements')}><FileText size={16} />1. 需求参数测算</button><button className={`tab ${activeMainTab === 'bom' ? 'tab-active' : ''}`} onClick={handleOpenBomTab}><ListTodo size={16} />2. BOM物料清单</button><button className={`tab ${activeMainTab === 'quotation_sheet' ? 'tab-active' : ''}`} onClick={() => setActiveMainTab('quotation_sheet')}><Coins size={16} />3. 正式报价单</button></div>
           <div className="quotation-body">{activeMainTab === 'requirements' && renderRequirementsPanel()}{activeMainTab === 'bom' && renderBomPanel()}{activeMainTab === 'quotation_sheet' && renderQuotationPanel()}</div>
         </section>
@@ -1798,7 +2175,7 @@ export default function App() {
       <header className="page-header page-header-knowledge"><div><h1>历史报价单</h1><p>归档后的报价版本统一沉淀到历史报价单，可按客户、场景、材质、防爆等级和结构快速检索。</p></div><button className="secondary-outline-button" onClick={() => setActiveNav('assistant')}><ArrowRight size={15} />返回报价助手</button></header>
       <main className="knowledge-layout archive-layout">
         <section className="archive-sidebar-panel archive-sidebar-panel-compact">
-          <div className="archive-sidebar-search"><Search size={16} /><input value={archiveSearch} onChange={(event) => setArchiveSearch(event.target.value)} placeholder="搜索客户、场景、型号、报价编号..." /></div>
+          <div className="archive-sidebar-search"><Search size={16} /><input value={archiveSearch} onChange={(event) => setArchiveSearch(event.target.value)} placeholder="搜索流程号、项目名称、方案名称、壳体尺寸..." /></div>
           <div className="quick-filter-row archive-filter-row"><button className={`quick-filter ${archiveQuickFilter === 'all' ? 'quick-filter-active' : ''}`} onClick={() => setArchiveQuickFilter('all')}>全部</button><button className={`quick-filter ${archiveQuickFilter === 'same-material' ? 'quick-filter-active' : ''}`} onClick={() => setArchiveQuickFilter('same-material')}>316材质</button><button className={`quick-filter ${archiveQuickFilter === 'same-explosion' ? 'quick-filter-active' : ''}`} onClick={() => setArchiveQuickFilter('same-explosion')}>同防爆等级</button><button className={`quick-filter ${archiveQuickFilter === 'same-structure' ? 'quick-filter-active' : ''}`} onClick={() => setArchiveQuickFilter('same-structure')}>同结构</button></div>
           <div className="knowledge-list-meta">共 {filteredArchives.length} 份历史报价单</div>
           <div className="archive-sidebar-list">{filteredArchives.map((item) => <button key={item.id} className={`archive-sidebar-item archive-sidebar-item-condensed ${selectedArchive?.id === item.id ? 'archive-sidebar-item-active' : ''}`} onClick={() => setSelectedArchiveId(item.id)}><div className="archive-sidebar-top"><span>{item.client}</span><small>{item.archivedAt}</small></div><strong>{item.application}</strong><p>{item.title}</p><div className="archive-sidebar-meta"><span>{item.material}</span><span>{item.dimensions}</span></div></button>)}</div>
@@ -1819,8 +2196,23 @@ export default function App() {
       {historyTab === 'quotes' ? (
         <main className="knowledge-layout archive-layout">
           <section className="archive-sidebar-panel archive-sidebar-panel-compact">
-            <div className="archive-sidebar-search"><Search size={16} /><input value={archiveSearch} onChange={(event) => setArchiveSearch(event.target.value)} placeholder="搜索客户、场景、型号、报价编号..." /></div>
+            <div className="filter-toolbar-main filter-toolbar-vertical">
+              <div className="archive-sidebar-search"><Search size={16} /><input value={archiveSearch} onChange={(event) => setArchiveSearch(event.target.value)} placeholder="搜索流程号、项目名称、方案名称、壳体尺寸..." /></div>
+              <button className={`filter-toggle-button ${archiveFilterOpen ? 'filter-toggle-button-active' : ''}`} onClick={() => setArchiveFilterOpen((prev) => !prev)}>筛选{archiveActiveFilterCount ? ` ${archiveActiveFilterCount}` : ''}</button>
+            </div>
+            {archiveFilterOpen && (
+              <div className="advanced-filter-panel archive-advanced-filter">
+                <label><span>流程号</span><input value={archiveFilters.flowNo} onChange={(event) => updateArchiveFilter('flowNo', event.target.value)} /></label>
+                <label><span>项目名称</span><input value={archiveFilters.projectName} onChange={(event) => updateArchiveFilter('projectName', event.target.value)} /></label>
+                <label><span>方案名称</span><input value={archiveFilters.schemeName} onChange={(event) => updateArchiveFilter('schemeName', event.target.value)} /></label>
+                <label><span>壳体尺寸</span><input value={archiveFilters.dimensions} onChange={(event) => updateArchiveFilter('dimensions', event.target.value)} /></label>
+                <label><span>客户/单位</span><input value={archiveFilters.client} onChange={(event) => updateArchiveFilter('client', event.target.value)} /></label>
+                <label><span>场景</span><select value={archiveFilters.sceneType} onChange={(event) => updateArchiveFilter('sceneType', event.target.value)}><option value="all">全部</option>{sceneOptions.map((scene) => <option key={scene.value} value={scene.value}>{scene.label}</option>)}</select></label>
+                <div className="filter-actions"><button className="secondary-outline-button" onClick={resetArchiveFilters}>重置</button></div>
+              </div>
+            )}
             <div className="quick-filter-row archive-filter-row"><button className={`quick-filter ${archiveQuickFilter === 'all' ? 'quick-filter-active' : ''}`} onClick={() => setArchiveQuickFilter('all')}>全部</button><button className={`quick-filter ${archiveQuickFilter === 'same-material' ? 'quick-filter-active' : ''}`} onClick={() => setArchiveQuickFilter('same-material')}>316材质</button><button className={`quick-filter ${archiveQuickFilter === 'same-explosion' ? 'quick-filter-active' : ''}`} onClick={() => setArchiveQuickFilter('same-explosion')}>同防爆等级</button><button className={`quick-filter ${archiveQuickFilter === 'same-structure' ? 'quick-filter-active' : ''}`} onClick={() => setArchiveQuickFilter('same-structure')}>同结构</button></div>
+            {renderFilterSummary(archiveActiveFilterCount, resetArchiveFilters)}
             <div className="knowledge-list-meta">共 {filteredArchives.length} 份历史报价单</div>
             <div className="archive-sidebar-list">{filteredArchives.map((item) => <button key={item.id} className={`archive-sidebar-item archive-sidebar-item-condensed ${selectedArchive?.id === item.id ? 'archive-sidebar-item-active' : ''}`} onClick={() => setSelectedArchiveId(item.id)}><div className="archive-sidebar-top"><span>{item.client}</span><small>{item.archivedAt}</small></div><strong>{item.application}</strong><p>{item.title}</p><div className="archive-sidebar-meta"><span>{item.material}</span><span>{item.dimensions}</span></div></button>)}</div>
           </section>
@@ -1835,9 +2227,27 @@ export default function App() {
           <section className="sheet-card">
             <div className="sheet-header compact-header">
               <div><h3>历史资料库</h3></div>
-              <div className="archive-sidebar-search material-search"><Search size={16} /><input value={materialSearch} onChange={(event) => setMaterialSearch(event.target.value)} placeholder="搜索项目代码、材质、防爆、格兰、端子数量..." /></div>
+              <div className="filter-toolbar-main">
+                <div className="archive-sidebar-search material-search"><Search size={16} /><input value={materialSearch} onChange={(event) => setMaterialSearch(event.target.value)} placeholder="搜索流程号、项目名称、方案名称、材质、防爆、格兰..." /></div>
+                <button className={`filter-toggle-button ${materialFilterOpen ? 'filter-toggle-button-active' : ''}`} onClick={() => setMaterialFilterOpen((prev) => !prev)}>筛选{materialActiveFilterCount ? ` ${materialActiveFilterCount}` : ''}</button>
+              </div>
             </div>
+            {materialFilterOpen && (
+              <div className="advanced-filter-panel advanced-filter-panel-4 material-advanced-filter">
+                <label><span>流程号</span><input value={materialFilters.flowNo} onChange={(event) => updateMaterialFilter('flowNo', event.target.value)} /></label>
+                <label><span>项目名称</span><input value={materialFilters.projectName} onChange={(event) => updateMaterialFilter('projectName', event.target.value)} /></label>
+                <label><span>方案名称</span><input value={materialFilters.schemeName} onChange={(event) => updateMaterialFilter('schemeName', event.target.value)} /></label>
+                <label><span>产品类别</span><select value={materialFilters.productType} onChange={(event) => updateMaterialFilter('productType', event.target.value)}><option value="all">全部</option><option value="接线箱">接线箱</option><option value="配电箱">配电箱</option><option value="操作柱">操作柱</option></select></label>
+                <label><span>箱体材质</span><input value={materialFilters.material} onChange={(event) => updateMaterialFilter('material', event.target.value)} /></label>
+                <label><span>防爆标志</span><input value={materialFilters.explosion} onChange={(event) => updateMaterialFilter('explosion', event.target.value)} /></label>
+                <label><span>端子数量</span><input value={materialFilters.terminalQty} onChange={(event) => updateMaterialFilter('terminalQty', event.target.value)} /></label>
+                <label><span>格兰规格</span><input value={materialFilters.glandSpec} onChange={(event) => updateMaterialFilter('glandSpec', event.target.value)} /></label>
+                <label><span>防雨罩</span><select value={materialFilters.rainCover} onChange={(event) => updateMaterialFilter('rainCover', event.target.value)}><option value="all">全部</option><option value="需要">需要</option><option value="不配防雨罩">不配防雨罩</option></select></label>
+                <div className="filter-actions"><button className="secondary-outline-button" onClick={resetMaterialFilters}>重置</button></div>
+              </div>
+            )}
             <div className="quick-filter-row material-filter-row"><button className={`quick-filter ${materialQuickFilter === 'all' ? 'quick-filter-active' : ''}`} onClick={() => setMaterialQuickFilter('all')}>全部</button><button className={`quick-filter ${materialQuickFilter === 'junction_box' ? 'quick-filter-active' : ''}`} onClick={() => setMaterialQuickFilter('junction_box')}>接线箱</button><button className={`quick-filter ${materialQuickFilter === 'material' ? 'quick-filter-active' : ''}`} onClick={() => setMaterialQuickFilter('material')}>不锈钢材质</button><button className={`quick-filter ${materialQuickFilter === 'gland' ? 'quick-filter-active' : ''}`} onClick={() => setMaterialQuickFilter('gland')}>含格兰规格</button></div>
+            {renderFilterSummary(materialActiveFilterCount, resetMaterialFilters)}
             <div className="table-wrap">
               <table className="quote-table historical-material-table">
                 <thead><tr><th>项目代码</th><th>行号</th>{HISTORICAL_PARAM_FIELDS.map(([, label]) => <th key={label}>{label}</th>)}</tr></thead>
@@ -1925,14 +2335,13 @@ export default function App() {
         <div className="recent-projects">
           <div className="recent-header">
             <span>近期项目报价</span>
-            <div className="recent-header-actions">
-              <button className="icon-button subtle" title="新增报价项目" onClick={openCreateProjectModal}><PlusCircle size={15} /></button>
-            </div>
+            <button className="sidebar-create-inline-button" onClick={openCreateProjectModal}><PlusCircle size={13} />新增报价项目</button>
           </div>
           {importError && <div className="sidebar-alert">{importError}</div>}
-          <div className="search-box"><Search size={14} /><input type="text" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="搜索客户、项目或场景..." /></div>
-          <div className="project-groups">{GROUP_LABELS.map((groupName) => { const items = pagedProjects[groupName]; if (!items?.length) return null; return <div key={groupName} className="project-group"><div className="group-title">{groupName}</div><div className="project-list">{items.map((project) => <button key={project.id} className={`project-card ${activeProjectId === project.id ? 'project-card-active' : ''}`} onClick={() => openProject(project)}><Folder size={15} /><div className="project-meta"><span>{project.info.client}</span><small>{getScene(project.sceneType).label} / {project.info.name}</small></div></button>)}</div></div>; })}</div>
-          <div className="pagination-box"><button className="page-nav-button" onClick={() => goProjectPage(projectPage - 1)} disabled={projectPage <= 1}><ChevronLeft size={14} /></button><div className="page-input-wrap"><span>第</span><input value={projectPageInput} onChange={(event) => setProjectPageInput(event.target.value.replace(/[^0-9]/g, ''))} onKeyDown={(event) => { if (event.key === 'Enter') goProjectPage(Number(projectPageInput || 1)); }} /><span>/ {totalProjectPages} 页</span></div><button className="page-jump-button" onClick={() => goProjectPage(Number(projectPageInput || 1))}>跳转</button><button className="page-nav-button" onClick={() => goProjectPage(projectPage + 1)} disabled={projectPage >= totalProjectPages}><ChevronRight size={14} /></button></div>
+          <div className="search-box search-box-with-action"><Search size={14} /><input type="text" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="搜索流程号、项目名称、方案名称" /><button type="button" className={projectActiveFilterCount ? 'filter-button-active' : ''} onClick={openProjectFilterPopover}>筛选{projectActiveFilterCount ? ` ${projectActiveFilterCount}` : ''}</button></div>
+          {renderFilterSummary(projectActiveFilterCount, resetProjectFilters)}
+          <div className="project-groups">{GROUP_LABELS.map((groupName) => { const items = pagedProjects[groupName]; if (!items?.length) return null; return <div key={groupName} className="project-group"><div className="group-title">{groupName}</div><div className="project-list">{items.map((project) => <button key={project.id} className={`project-card project-card-compact ${activeProjectId === project.id ? 'project-card-active' : ''}`} onClick={() => openProject(project)}><div className="project-meta project-meta-compact"><span className="project-flow-no">{project.info.flowNo}</span><small>{makeSidebarProjectTitle(project)}</small></div><span role="button" tabIndex={0} className="project-row-delete" onClick={(event) => handleDeleteProject(project, event)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') handleDeleteProject(project, event); }} aria-label={`删除项目 ${project.info.flowNo}`}><Trash2 size={13} /></span></button>)}</div></div>; })}</div>
+          <div className="pagination-box pagination-box-compact"><button className="page-nav-button" onClick={() => goProjectPage(projectPage - 1)} disabled={projectPage <= 1}><ChevronLeft size={14} /></button><span className="page-compact-text">{projectPage}/{totalProjectPages}</span><button className="page-nav-button" onClick={() => goProjectPage(projectPage + 1)} disabled={projectPage >= totalProjectPages}><ChevronRight size={14} /></button></div>
         </div>
       );
     }
@@ -1944,7 +2353,7 @@ export default function App() {
             <span>待审核报价单</span>
           </div>
           {importError && <div className="sidebar-alert">{importError}</div>}
-          <div className="search-box"><Search size={14} /><input type="text" value={batchSearchQuery} onChange={(event) => setBatchSearchQuery(event.target.value)} placeholder="搜索项目代码、序号或场景..." /></div>
+          <div className="search-box"><Search size={14} /><input type="text" value={batchSearchQuery} onChange={(event) => setBatchSearchQuery(event.target.value)} placeholder="搜索流程号、项目名称、方案名称..." /></div>
           {sidebarBatchRecords.length ? (
             <div className="batch-sidebar-list">
               {sidebarBatchRecords.map((record) => (
@@ -1994,6 +2403,28 @@ export default function App() {
         {renderSidebarWorkspace()}
       </aside>
       <div className="content-shell">{renderContent()}</div>
+
+      {isAiDrawerOpen && (
+        <div className="drawer-backdrop" onClick={() => setIsAiDrawerOpen(false)}>
+          <aside className="ai-drawer" onClick={(event) => event.stopPropagation()}>
+            <div className="drawer-header">
+              <div><h2>AI 助手</h2><p>{currentProject?.info.name}</p></div>
+              <button className="icon-button subtle" onClick={() => setIsAiDrawerOpen(false)}><X size={22} /></button>
+            </div>
+            <div className="chat-panel-head drawer-project-head">
+              <div className="chat-project-meta"><strong>{currentProject?.info.flowNo || '未填流程号'}</strong><span>{currentProject?.info.client}</span></div>
+              <div className="assistant-mini-strip"><span className="assistant-mini-pill">{currentScene.label}</span><span className="assistant-mini-pill">{currentVersion?.label}</span></div>
+            </div>
+            <div className="chat-scroll drawer-chat-scroll" ref={chatScrollRef}>
+              {(currentChat || []).length ? (currentChat || []).map((item) => <div key={item.id} className={`chat-row ${item.sender === 'user' ? 'chat-row-user' : 'chat-row-ai'}`}>{item.sender === 'ai' && <div className="chat-avatar">AI</div>}<div className={`chat-bubble ${item.sender === 'user' ? 'chat-bubble-user' : 'chat-bubble-ai'}`}>{renderRichMessage(item.text, item.sender === 'ai')}</div></div>) : <div className="drawer-empty">暂无对话记录</div>}
+            </div>
+            <div className="drawer-actions">
+              <button className="secondary-outline-button" onClick={handleClearCurrentChat}>清空历史数据</button>
+            </div>
+            <div className="chat-input-bar drawer-input-bar"><button className="icon-button subtle"><Mic size={16} /></button><button className="icon-button subtle"><Paperclip size={16} /></button><input value={inputText} onChange={(event) => setInputText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') handleSendMessage(); }} placeholder={`补充${currentScene.label}参数，AI 自动填充...`} /><button className="send-button" onClick={handleSendMessage}><Send size={18} /></button></div>
+          </aside>
+        </div>
+      )}
 
       {importPreview && (
         <div className="modal-backdrop">
@@ -2045,20 +2476,48 @@ export default function App() {
         </div>
       )}
 
+      {projectFilterOpen && (
+        <div className="modal-backdrop filter-modal-backdrop" onClick={() => setProjectFilterOpen(false)}>
+          <div className="modal-card project-filter-modal-card" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-header"><h2>筛选近期项目</h2><button className="icon-button subtle" onClick={() => setProjectFilterOpen(false)}><X size={22} /></button></div>
+            <div className="modal-content project-filter-modal-content">
+              <label><span>流程号</span><input value={projectDraftFilters.flowNo} onChange={(event) => updateProjectDraftFilter('flowNo', event.target.value)} placeholder="输入流程号" /></label>
+              <label><span>项目名称</span><input value={projectDraftFilters.projectName} onChange={(event) => updateProjectDraftFilter('projectName', event.target.value)} placeholder="输入项目名称" /></label>
+              <label><span>方案名称</span><input value={projectDraftFilters.schemeName} onChange={(event) => updateProjectDraftFilter('schemeName', event.target.value)} placeholder="输入方案名称" /></label>
+              <label><span>场景</span><select value={projectDraftFilters.sceneType} onChange={(event) => updateProjectDraftFilter('sceneType', event.target.value)}><option value="all">全部</option>{sceneOptions.map((scene) => <option key={scene.value} value={scene.value}>{scene.label}</option>)}</select></label>
+              <label><span>时间</span><select value={projectDraftFilters.dateGroup} onChange={(event) => updateProjectDraftFilter('dateGroup', event.target.value)}><option value="all">全部</option>{GROUP_LABELS.map((label) => <option key={label} value={label}>{label}</option>)}</select></label>
+            </div>
+            <div className="modal-footer"><button className="secondary-button" onClick={resetProjectFilters}>重置</button><button className="primary-button" onClick={applyProjectDraftFilters}>应用筛选</button></div>
+          </div>
+        </div>
+      )}
+
       {isCreateProjectOpen && (
         <div className="modal-backdrop">
           <div className="modal-card create-modal-card">
             <div className="modal-header"><h2><PlusCircle size={20} />新增报价项目</h2><button className="icon-button subtle" onClick={() => setIsCreateProjectOpen(false)}><X size={24} /></button></div>
             <div className="modal-content create-modal-content">
-              <div className="scene-choice-grid">
-                {Object.entries(SCENES).map(([key, scene]) => <button key={key} className={`scene-choice-card ${createSceneType === key ? 'scene-choice-card-active' : ''}`} onClick={() => handleSelectCreateScene(key)}><strong>{scene.label}</strong><span>{scene.description}</span></button>)}
+              <div className="table-wrap create-project-table-wrap">
+                <table className="quote-table create-project-table">
+                  <thead><tr><th>流程号 *</th><th>项目名称 *</th><th>场景类型</th><th>用户单位</th><th>业务发展商</th><th>文字需求</th><th className="center">操作</th></tr></thead>
+                  <tbody>
+                    {createProjectRows.map((row, index) => (
+                      <tr key={row.id}>
+                        <td><input value={row.flowNo} onChange={(event) => updateCreateProjectRow(row.id, 'flowNo', event.target.value)} placeholder="流程号" autoFocus={index === 0} /></td>
+                        <td><input value={row.projectName} onChange={(event) => updateCreateProjectRow(row.id, 'projectName', event.target.value)} placeholder="项目名称" /></td>
+                        <td><select value={row.sceneType} onChange={(event) => handleSelectCreateScene(event.target.value, row.id)}>{Object.entries(SCENES).map(([key, scene]) => <option key={key} value={key}>{scene.label}</option>)}</select></td>
+                        <td><input value={row.userUnit} onChange={(event) => updateCreateProjectRow(row.id, 'userUnit', event.target.value)} placeholder="选填" /></td>
+                        <td><input value={row.developer} onChange={(event) => updateCreateProjectRow(row.id, 'developer', event.target.value)} placeholder="选填" /></td>
+                        <td><textarea value={row.requirementText} onChange={(event) => updateCreateProjectRow(row.id, 'requirementText', event.target.value)} placeholder="粘贴客户需求，创建后自动识别填入参数" /></td>
+                        <td className="center"><button className="mini-link-button" onClick={() => removeCreateProjectRow(row.id)} disabled={createProjectRows.length <= 1}>删除</button></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
-              <label className="create-project-name-field">
-                <span>项目名称</span>
-                <input type="text" value={createProjectName} onChange={(event) => setCreateProjectName(event.target.value)} placeholder="请输入项目名称" autoFocus />
-              </label>
+              <button className="secondary-outline-button create-add-row-button" onClick={addCreateProjectRow}><PlusCircle size={15} />新增一条项目</button>
             </div>
-            <div className="modal-footer"><button className="secondary-button" onClick={() => setIsCreateProjectOpen(false)}>取消</button><button className="primary-button" onClick={handleCreateProject} disabled={!createProjectName.trim()}>创建项目</button></div>
+            <div className="modal-footer"><button className="secondary-button" onClick={() => setIsCreateProjectOpen(false)}>取消</button><button className="primary-button" onClick={handleCreateProject} disabled={createProjectRows.some((row) => !row.flowNo.trim() || !row.projectName.trim())}>创建项目</button></div>
           </div>
         </div>
       )}
